@@ -92,6 +92,36 @@ class InferenceAction(Action):
                 outputs = predictor(img)["instances"]
                 cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
         cls.postexecute(context)
+        
+    # @classmethod
+    # def execute(cls: type, args: argparse.Namespace, multi_frames=True):
+    #     logger.info(f"Loading config from {args.cfg}")
+    #     opts = []
+    #     cfg = cls.setup_config(args.cfg, args.model, args, opts)
+    #     logger.info(f"Loading model from {args.model}")
+    #     predictor = DefaultPredictor(cfg) if not multi_frames else DefaultPredictorMulti(cfg)
+    #     # pdb.set_trace()
+    #     logger.info(f"Loading data from {args.input}")
+    #     file_list = cls._get_input_file_list(args.input)
+    #     if len(file_list) == 0:
+    #         logger.warning(f"No input images for {args.input}")
+    #         return
+    #     context = cls.create_context(args)
+    #     # for file_name in tqdm.tqdm(file_list):
+    #     for idx in tqdm.tqdm(range(len(file_list))):
+    #         if multi_frames:
+    #             time_scope = 1
+    #             img = []
+    #             for i in range(-time_scope,time_scope+1,1):
+    #                 idx_valid = min(max(idx+i,0),len(file_list))
+    #                 file_name = file_list[idx_valid]
+    #                 img.append(file_name)
+    #         else:
+    #             img = read_image(file_name, format="BGR")  # predictor expects BGR image.
+    #         with torch.no_grad():
+    #             outputs = predictor(img)["instances"]
+    #             cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
+    #     cls.postexecute(context)
 
     @classmethod
     def setup_config(

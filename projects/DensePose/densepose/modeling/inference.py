@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from typing import List, Tuple
-import torch
+import torch, pdb
 
 from detectron2.structures import Instances
 
@@ -50,6 +50,7 @@ def densepose_inference(
     """
     # DensePose outputs: segmentation, body part indices, U, V
     s, index_uv, u, v = densepose_outputs
+    # pdb.set_trace()
     (
         sigma_1,
         sigma_2,

@@ -3,7 +3,7 @@
 import numpy as np
 from typing import Dict, List, Optional
 import fvcore.nn.weight_init as weight_init
-import torch, pdb
+import torch, pdb, os, pickle
 import torch.nn as nn
 from torch.nn import functional as F
 
@@ -122,7 +122,14 @@ class DensePoseROIHeads(StandardROIHeads):
         )
         self.densepose_losses = build_densepose_losses(cfg)
         ## MLQ added
-        self._register_feature_hooks()
+        self._register_hooks()
+        self.cnt = 0
+        self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/youtube_single"
+        self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/youtube_liqian01"
+        print("--> data_dir: ", self.data_dir)
+        self.out_dir = os.path.join(self.data_dir, "DP_fea")
+        if not os.path.exists(self.out_dir):
+            os.makedirs(self.out_dir)
 
     def _forward_densepose(self, features: Dict[str, torch.Tensor], instances: List[Instances]):
         """
@@ -145,6 +152,7 @@ class DensePoseROIHeads(StandardROIHeads):
         if not self.densepose_on:
             return {} if self.training else instances
 
+        # pdb.set_trace()
         features = [features[f] for f in self.in_features]
         if self.training:
             proposals, _ = select_foreground_proposals(instances, self.num_classes)
@@ -170,8 +178,8 @@ class DensePoseROIHeads(StandardROIHeads):
             if self.use_decoder:
                 features = [self.decoder(features)]
 
-            pdb.set_trace()
-            "TODO:average the warped t+-1 features"
+            "TODO: (1) smooth the pred_boxes with t+-1, save all bbox and load for (track) smooth;" 
+            "TODO: (2) save densepose_outputs, confidences"
             features_dp = self.densepose_pooler(features, pred_boxes)
             if len(features_dp) > 0:
                 densepose_head_outputs = self.densepose_head(features_dp)
@@ -185,11 +193,18 @@ class DensePoseROIHeads(StandardROIHeads):
                 densepose_outputs = tuple([empty_tensor] * 4)
                 confidences = tuple([empty_tensor] * 6)
 
+            # pdb.set_trace()
+            self.cnt += 1
+            out_dict = {"pred_boxes":pred_boxes, "densepose_outputs":densepose_outputs,
+                        "confidences":confidences}
+            path = os.path.join(self.out_dir, "frame_{:06d}.pkl".format(self.cnt))
+            pickle.dump(out_dict, open(path,"wb"))
+
             densepose_inference(densepose_outputs, confidences, instances)
             return instances
 
     ## MLQ added
-    def _register_feature_hooks(self):
+    def _register_hooks(self):
         ## Ref:https://gist.github.com/Tushar-N/680633ec18f5cb4b47933da7d10902af
         # Registering hooks for all the Conv2d layers
         # Note: Hooks are called EVERY TIME the module performs a forward pass. For modules that are
