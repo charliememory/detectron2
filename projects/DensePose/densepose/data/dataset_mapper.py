@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-import copy
+import copy, pdb
 import logging
 from typing import Any, Dict, Tuple
 import torch
@@ -58,6 +58,14 @@ class DatasetMapper:
                 MetadataCatalog.get(ds).densepose_transform_src
                 for ds in cfg.DATASETS.TRAIN + cfg.DATASETS.TEST
             ]
+            # pdb.set_trace()
+            # densepose_transform_srcs = []
+            # for ds in cfg.DATASETS.TRAIN + cfg.DATASETS.TEST:
+            #     try:
+            #         ts = MetadataCatalog.get(ds).densepose_transform_src
+            #     except:
+            #         ts = 'https://dl.fbaipublicfiles.com/densepose/data/UV_symmetry_transforms.mat'
+            #     densepose_transform_srcs.append(ts)
             assert len(densepose_transform_srcs) > 0
             # TODO: check that DensePose transformation data is the same for
             # all the datasets. Otherwise one would have to pass DB ID with

@@ -46,3 +46,8 @@ wheels/
 !/datasets/*.*
 /projects/*/datasets
 /models
+
+/projects/DensePose/condor
+/projects/DensePose/outputs
+/projects/DensePose/*.pkl
+/projects/DensePose/*.png

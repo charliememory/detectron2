@@ -2,7 +2,7 @@
 import contextlib
 import io
 import logging
-import os
+import os, pdb
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
@@ -268,7 +268,16 @@ def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: st
     #  'width': 640,
     #  'date_captured': '2013-11-17 05:57:24',
     #  'id': 1268}
+
     imgs = coco_api.loadImgs(img_ids)
+    # pdb.set_trace()
+
+    ##### MLQ added #####
+    ## Filter out unlabeled train/val data in densepose-track 
+    img_ids, imgs = filter_out_no_densepose(imgs)
+    #####################
+
+
     logger = logging.getLogger(__name__)
     logger.info("Loaded {} images in COCO format from {}".format(len(imgs), annotations_json_file))
     # anns is a list[list[dict]], where each dict is an annotation
@@ -278,6 +287,17 @@ def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: st
     _verify_annotations_have_unique_ids(annotations_json_file, anns)
     dataset_records = _combine_images_with_annotations(dataset_name, image_root, imgs, anns)
     return dataset_records
+
+def filter_out_no_densepose(img_list):
+    valid_img_list = []
+    for img in img_list:
+        if 'has_no_densepose' in img.keys():
+            # Ignoring frames with no densepose supervision.
+            continue
+        else:
+            valid_img_list.append(img)
+    valid_img_ids = sorted([img['id'] for img in valid_img_list])
+    return valid_img_ids, valid_img_list
 
 
 def register_dataset(dataset_data: CocoDatasetInfo, datasets_root: Optional[os.PathLike] = None):

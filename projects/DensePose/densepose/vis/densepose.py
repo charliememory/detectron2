@@ -2,12 +2,12 @@
 import logging
 import numpy as np
 from typing import Iterable, Optional, Tuple
-import cv2
+import cv2, pdb
 
 from ..data.structures import DensePoseDataRelative, DensePoseOutput, DensePoseResult
 from .base import Boxes, Image, MatrixVisualizer, PointsVisualizer
 
-
+# cnt=0
 class DensePoseResultsVisualizer(object):
     def visualize(self, image_bgr: Image, densepose_result: Optional[DensePoseResult]) -> Image:
         if densepose_result is None:
@@ -17,9 +17,21 @@ class DensePoseResultsVisualizer(object):
             iuv_arr = DensePoseResult.decode_png_data(*result_encoded_w_shape)
             bbox_xywh = densepose_result.boxes_xywh[i]
             self.visualize_iuv_arr(context, iuv_arr, bbox_xywh)
+            
         image_bgr = self.context_to_image_bgr(context)
-        return image_bgr
+# #############
+#         global cnt
+#         # import matplotlib.pyplot as plt
+#         # plt.savefig('tmp_{}.png'.format(cnt))
 
+#         import imageio
+#         image_bgr = self.context_to_image_bgr(context)
+#         imageio.imwrite('tmp_{}.png'.format(cnt), image_bgr)
+
+#         cnt += 1
+#         pdb.set_trace()
+# #############
+        return image_bgr
 
 class DensePoseMaskedColormapResultsVisualizer(DensePoseResultsVisualizer):
     def __init__(
@@ -93,6 +105,7 @@ class DensePoseResultsMplContourVisualizer(DensePoseResultsVisualizer):
         return context
 
     def context_to_image_bgr(self, context):
+        import matplotlib.pyplot as plt
         fig = context["fig"]
         w, h = map(int, fig.get_size_inches() * fig.get_dpi())
         canvas = context["canvas"]
@@ -100,6 +113,9 @@ class DensePoseResultsMplContourVisualizer(DensePoseResultsVisualizer):
         image_1d = np.fromstring(canvas.tostring_rgb(), dtype="uint8")
         image_rgb = image_1d.reshape(h, w, 3)
         image_bgr = image_rgb[:, :, ::-1].copy()
+        ## MLQ add
+        plt.close(fig)
+        # pdb.set_trace() 
         return image_bgr
 
     def visualize_iuv_arr(self, context, iuv_arr: np.ndarray, bbox_xywh: Boxes) -> Image:

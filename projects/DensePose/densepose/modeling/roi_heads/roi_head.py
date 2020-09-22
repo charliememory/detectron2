@@ -3,7 +3,7 @@
 import numpy as np
 from typing import Dict, List, Optional
 import fvcore.nn.weight_init as weight_init
-import torch
+import torch, pdb
 import torch.nn as nn
 from torch.nn import functional as F
 
@@ -121,6 +121,8 @@ class DensePoseROIHeads(StandardROIHeads):
             cfg, self.densepose_head.n_out_channels
         )
         self.densepose_losses = build_densepose_losses(cfg)
+        ## MLQ added
+        self._register_feature_hooks()
 
     def _forward_densepose(self, features: Dict[str, torch.Tensor], instances: List[Instances]):
         """
@@ -168,6 +170,8 @@ class DensePoseROIHeads(StandardROIHeads):
             if self.use_decoder:
                 features = [self.decoder(features)]
 
+            pdb.set_trace()
+            "TODO:average the warped t+-1 features"
             features_dp = self.densepose_pooler(features, pred_boxes)
             if len(features_dp) > 0:
                 densepose_head_outputs = self.densepose_head(features_dp)
@@ -183,6 +187,28 @@ class DensePoseROIHeads(StandardROIHeads):
 
             densepose_inference(densepose_outputs, confidences, instances)
             return instances
+
+    ## MLQ added
+    def _register_feature_hooks(self):
+        ## Ref:https://gist.github.com/Tushar-N/680633ec18f5cb4b47933da7d10902af
+        # Registering hooks for all the Conv2d layers
+        # Note: Hooks are called EVERY TIME the module performs a forward pass. For modules that are
+        # called repeatedly at different stages of the forward pass (like RELUs), this will save different
+        # activations. Editing the forward pass code to save activations is the way to go for these cases.
+        # a dictionary that keeps saving the activations as they come
+        # self.activations = collections.defaultdict(list)
+        from functools import partial
+        import collections
+        # def save_activation(name, mod, inp, out):
+        #     self.activations[name].append(out)
+        self.activations = collections.defaultdict()
+        def save_activation(name, mod, inp, out):
+            self.activations[name] = out
+
+        for name, m in self.densepose_head.named_modules():
+            if type(m)==nn.Conv2d:
+                # partial to assign the layer name to each hook
+                m.register_forward_hook(partial(save_activation, name))
 
     def forward(
         self,

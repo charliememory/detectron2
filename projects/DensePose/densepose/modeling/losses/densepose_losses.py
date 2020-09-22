@@ -2,7 +2,7 @@
 import math
 from dataclasses import dataclass
 from typing import Iterable, Optional
-import torch
+import torch, pdb
 from torch import nn
 from torch.nn import functional as F
 
@@ -623,6 +623,10 @@ class DensePoseLosses(object):
         assert u.size(2) == index_uv.size(2)
         assert u.size(3) == index_uv.size(3)
         densepose_outputs_size = u.size()
+        
+        # pdb.set_trace()
+        # import imageio
+        # imageio.imwrite('~/tmp_-1.png', index_uv[0,-1].detach().cpu().numpy())
 
         if not len(proposals_with_gt):
             return self.produce_fake_densepose_losses(densepose_outputs, densepose_confidences)
@@ -720,6 +724,7 @@ class DensePoseLosses(object):
             losses["loss_densepose_V"] = v_loss
         index_uv_loss = F.cross_entropy(index_uv_est, index_uv_gt.long()) * self.w_part
         losses["loss_densepose_I"] = index_uv_loss
+        # if index_uv_gt.min()==0:
 
         if not self.segm_trained_by_masks:
             if self.n_segm_chan == 2:

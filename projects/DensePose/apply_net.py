@@ -4,7 +4,7 @@
 import argparse
 import glob
 import logging
-import os
+import os, pdb, tqdm
 import pickle
 import sys
 from typing import Any, ClassVar, Dict, List
@@ -79,13 +79,14 @@ class InferenceAction(Action):
         cfg = cls.setup_config(args.cfg, args.model, args, opts)
         logger.info(f"Loading model from {args.model}")
         predictor = DefaultPredictor(cfg)
+        # pdb.set_trace()
         logger.info(f"Loading data from {args.input}")
         file_list = cls._get_input_file_list(args.input)
         if len(file_list) == 0:
             logger.warning(f"No input images for {args.input}")
             return
         context = cls.create_context(args)
-        for file_name in file_list:
+        for file_name in tqdm.tqdm(file_list):
             img = read_image(file_name, format="BGR")  # predictor expects BGR image.
             with torch.no_grad():
                 outputs = predictor(img)["instances"]
@@ -110,15 +111,24 @@ class InferenceAction(Action):
     @classmethod
     def _get_input_file_list(cls: type, input_spec: str):
         if os.path.isdir(input_spec):
-            file_list = [
-                os.path.join(input_spec, fname)
-                for fname in os.listdir(input_spec)
-                if os.path.isfile(os.path.join(input_spec, fname))
-            ]
+            subfile = os.path.join(input_spec, os.listdir(input_spec)[0])
+            if os.path.isdir(subfile):
+                subsubfile = os.path.join(subfile, os.listdir(subfile)[0])
+                if os.path.isdir(subsubfile):
+                    file_list = glob.glob(os.path.join(input_spec, '*/*/*.jpg'))
+                # pdb.set_trace()
+            else:
+                file_list = [
+                    os.path.join(input_spec, fname)
+                    for fname in os.listdir(input_spec)
+                    if os.path.isfile(os.path.join(input_spec, fname))
+                ]
         elif os.path.isfile(input_spec):
             file_list = [input_spec]
         else:
             file_list = glob.glob(input_spec)
+
+        file_list = sorted(file_list)
         return file_list
 
 
@@ -243,7 +253,7 @@ class ShowAction(InferenceAction):
     def execute_on_outputs(
         cls: type, context: Dict[str, Any], entry: Dict[str, Any], outputs: Instances
     ):
-        import cv2
+        import cv2, pdb
         import numpy as np
 
         visualizer = context["visualizer"]
@@ -252,7 +262,9 @@ class ShowAction(InferenceAction):
         logger.info(f"Processing {image_fpath}")
         image = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2GRAY)
         image = np.tile(image[:, :, np.newaxis], [1, 1, 3])
+        # pdb.set_trace()
         data = extractor(outputs)
+        # pdb.set_trace()
         image_vis = visualizer.visualize(image, data)
         entry_idx = context["entry_idx"] + 1
         out_fname = cls._get_out_fname(entry_idx, context["out_fname"])
@@ -270,7 +282,8 @@ class ShowAction(InferenceAction):
     @classmethod
     def _get_out_fname(cls: type, entry_idx: int, fname_base: str):
         base, ext = os.path.splitext(fname_base)
-        return base + ".{0:04d}".format(entry_idx) + ext
+        # return base + ".{0:04d}".format(entry_idx) + ext
+        return base + "{0:06d}".format(entry_idx) + ext
 
     @classmethod
     def create_context(cls: type, args: argparse.Namespace) -> Dict[str, Any]:
