@@ -86,13 +86,18 @@ class InferenceAction(Action):
             logger.warning(f"No input images for {args.input}")
             return
         context = cls.create_context(args)
+        # cnt = 0
+        # pdb.set_trace()
         for file_name in tqdm.tqdm(file_list):
+            # cnt += 1
+            # if cnt<50:
+            #     continue
             img = read_image(file_name, format="BGR")  # predictor expects BGR image.
             with torch.no_grad():
                 outputs = predictor(img)["instances"]
                 cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
         cls.postexecute(context)
-        
+
     # @classmethod
     # def execute(cls: type, args: argparse.Namespace, multi_frames=True):
     #     logger.info(f"Loading config from {args.cfg}")
@@ -135,6 +140,8 @@ class InferenceAction(Action):
         if opts:
             cfg.merge_from_list(opts)
         cfg.MODEL.WEIGHTS = model_fpath
+        ## MLQ added
+        cfg.MODEL.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         cfg.freeze()
         return cfg
 

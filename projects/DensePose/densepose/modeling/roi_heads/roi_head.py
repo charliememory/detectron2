@@ -11,7 +11,7 @@ from detectron2.layers import Conv2d, ShapeSpec, get_norm
 from detectron2.modeling import ROI_HEADS_REGISTRY, StandardROIHeads
 from detectron2.modeling.poolers import ROIPooler
 from detectron2.modeling.roi_heads import select_foreground_proposals
-from detectron2.structures import ImageList, Instances
+from detectron2.structures import ImageList, Instances, Boxes
 
 from .. import (
     build_densepose_data_filter,
@@ -21,6 +21,12 @@ from .. import (
     densepose_inference,
 )
 
+import io, copy
+class CPU_Unpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == 'torch.storage' and name == '_load_from_bytes':
+            return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+        else: return super().find_class(module, name)
 
 class Decoder(nn.Module):
     """
@@ -123,11 +129,17 @@ class DensePoseROIHeads(StandardROIHeads):
         self.densepose_losses = build_densepose_losses(cfg)
         ## MLQ added
         self._register_hooks()
-        self.cnt = 0
-        self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/youtube_single"
-        self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/youtube_liqian01"
+        self.cnt = 1
+        self.smooth_k = 2
+        self.prev_instances = None
+        # self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/youtube_single"
+        self.data_dir = "/esat/dragon/liqianma/datasets/Pose/youtube/liqian01"
         print("--> data_dir: ", self.data_dir)
-        self.out_dir = os.path.join(self.data_dir, "DP_fea")
+        self.in_dir = os.path.join(self.data_dir, "DP_fea")
+        if self.smooth_k>0 and os.path.exists(self.in_dir) and len(os.listdir(self.in_dir))>0:
+            self.out_dir = os.path.join(self.data_dir, "DP_fea_smooth{}".format(self.smooth_k))
+        else:
+            self.out_dir = os.path.join(self.data_dir, "DP_fea")
         if not os.path.exists(self.out_dir):
             os.makedirs(self.out_dir)
 
@@ -174,6 +186,24 @@ class DensePoseROIHeads(StandardROIHeads):
                 return densepose_loss_dict
         else:
             pred_boxes = [x.pred_boxes for x in instances]
+            scores = [x.scores for x in instances]
+            # pdb.set_trace()
+            if self.smooth_k>0:
+                pred_boxes, idx = self.smooth_bbox(self.in_dir, self.cnt, self.smooth_k, single_person=True)
+                
+                for i in range(len(instances)):
+                    if len(instances[i])>1:
+                        try:
+                            instances[i] = instances[i][idx.item()]
+                        except:
+                            print(idx)
+                            instances[i] = instances[i][idx]
+                    elif len(instances[i])==0:
+                        instances = copy.copy(self.prev_instances)
+                    instances[i].pred_boxes = pred_boxes[i]
+                    # except:
+                    #     pdb.set_trace()
+            self.prev_instances = copy.copy(instances)
 
             if self.use_decoder:
                 features = [self.decoder(features)]
@@ -194,14 +224,82 @@ class DensePoseROIHeads(StandardROIHeads):
                 confidences = tuple([empty_tensor] * 6)
 
             # pdb.set_trace()
-            self.cnt += 1
-            out_dict = {"pred_boxes":pred_boxes, "densepose_outputs":densepose_outputs,
-                        "confidences":confidences}
+            # out_dict = {"pred_boxes":pred_boxes, "densepose_outputs":densepose_outputs,
+            #             "confidences":confidences, "scores":scores}
+            out_dict = {"pred_boxes":self.to_cpu(pred_boxes), 
+                        "densepose_outputs":self.to_cpu(densepose_outputs),
+                        "confidences":self.to_cpu(confidences), 
+                        "scores":self.to_cpu(scores),
+                        "height":instances[0].image_size[0],
+                        "width":instances[0].image_size[1],}
             path = os.path.join(self.out_dir, "frame_{:06d}.pkl".format(self.cnt))
             pickle.dump(out_dict, open(path,"wb"))
+            self.cnt += 1
 
             densepose_inference(densepose_outputs, confidences, instances)
             return instances
+
+    def to_cpu(self, obj_list):
+        for i in range(len(obj_list)):
+            try:
+                obj_list[i] = obj_list[i].to("cpu")
+            except:
+                pass
+        return obj_list
+
+    def to_cuda(self, obj_list):
+        for i in range(len(obj_list)):
+            try:
+                obj_list[i] = obj_list[i].to("cuda")
+            except:
+                pass
+        return obj_list
+
+    ## MLQ added
+    def smooth_bbox(self, data_dir, fid, k=3, single_person=True, score_threshold=0.8):
+        bbox_tensor_list = []
+        fid_max = len(os.listdir(data_dir))
+        # if fid_max==0:
+        #     return None
+
+        for fid_delta in range(-k,k+1):
+            fid_i = min(fid_max, max(1,fid+fid_delta))
+            path = os.path.join(data_dir, "frame_{:06d}.pkl".format(fid_i))
+            # if torch.cuda.is_available():
+            #     data = pickle.load(open(path,"rb"))
+            # else:
+            #     data = CPU_Unpickler(open(path,"rb")).load()
+            if torch.cuda.is_available():
+                data = pickle.load(open(os.path.join(data_dir, "frame_{:06d}.pkl".format(10)),"rb"))
+                for k in data.keys():
+                    try:
+                        data[k] = self.to_cuda(data[k])
+                    except:
+                        pass
+            else:
+                data = pickle.load(open(path,"rb"))
+                # with torch.loading_context(map_location='cpu'):
+                #     data = pickle.load(open(path,"rb")) # In my case this call is buried deeper in torch-agnostic code
+
+            boxes = data["pred_boxes"][0]
+            scores = data["scores"][0]
+            if single_person:
+                idx = torch.argmax(scores) if scores.shape[0]>1 else 0
+                boxes_tensor = boxes.tensor[idx:idx+1]
+            else:
+                "TODO: multi-object association"
+                pass
+            if boxes_tensor.shape[0]>0:
+                bbox_tensor_list.append(boxes_tensor)
+        pdb.set_trace()
+        xywh = torch.stack(bbox_tensor_list, dim=-1) ## xywh in Nx4x(2k+1) shape
+        xywh_smooth = torch.zeros_like(xywh[:,:,0])
+        xywh_smooth[:,0] = torch.min(xywh[:,0], dim=-1)[0]
+        xywh_smooth[:,1] = torch.min(xywh[:,1], dim=-1)[0]
+        xywh_smooth[:,2] = torch.max(xywh[:,2], dim=-1)[0]
+        xywh_smooth[:,3] = torch.max(xywh[:,3], dim=-1)[0]
+        return [Boxes(xywh_smooth)], idx
+
 
     ## MLQ added
     def _register_hooks(self):
