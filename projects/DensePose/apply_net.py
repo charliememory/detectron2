@@ -65,6 +65,7 @@ class InferenceAction(Action):
         parser.add_argument("cfg", metavar="<config>", help="Config file")
         parser.add_argument("model", metavar="<model>", help="Model file")
         parser.add_argument("input", metavar="<input>", help="Input data")
+        parser.add_argument("--smooth_k", type=int, default=0, metavar="<smooth_k>", help="smooth_k")
         parser.add_argument(
             "--opts",
             help="Modify config options using the command-line 'KEY VALUE' pairs",
@@ -142,6 +143,8 @@ class InferenceAction(Action):
         cfg.MODEL.WEIGHTS = model_fpath
         ## MLQ added
         cfg.MODEL.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+        cfg.DATA_DIR = os.path.dirname(args.input)
+        cfg.SMOOTH_K = args.smooth_k
         cfg.freeze()
         return cfg
 
@@ -205,9 +208,8 @@ class DumpAction(InferenceAction):
         if outputs.has("pred_boxes"):
             result["pred_boxes_XYXY"] = outputs.get("pred_boxes").tensor.cpu()
             if outputs.has("pred_densepose"):
-                boxes_XYWH = BoxMode.convert(
-                    result["pred_boxes_XYXY"], BoxMode.XYXY_ABS, BoxMode.XYWH_ABS
-                )
+                # pdb.set_trace()
+                boxes_XYWH = BoxMode.convert(result["pred_boxes_XYXY"], BoxMode.XYXY_ABS, BoxMode.XYWH_ABS)
                 result["pred_densepose"] = outputs.get("pred_densepose").to_result(boxes_XYWH)
         context["results"].append(result)
 
