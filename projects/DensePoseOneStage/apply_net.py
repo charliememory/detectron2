@@ -10,14 +10,15 @@ import sys
 from typing import Any, ClassVar, Dict, List
 import torch
 
-from detectron2.config import get_cfg
+# from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.engine.defaults import DefaultPredictor
 from detectron2.structures.boxes import BoxMode
 from detectron2.structures.instances import Instances
 from detectron2.utils.logger import setup_logger
 
-from densepose import add_densepose_config, add_hrnet_config
+from densepose.config import get_cfg
+from densepose import add_densepose_config, add_hrnet_config, add_adet_cfg
 from densepose.utils.logger import verbosity_to_level
 from densepose.vis.base import CompoundVisualizer
 from densepose.vis.bounding_box import ScoredBoundingBoxVisualizer
@@ -65,6 +66,12 @@ class InferenceAction(Action):
         parser.add_argument("cfg", metavar="<config>", help="Config file")
         parser.add_argument("model", metavar="<model>", help="Model file")
         parser.add_argument("input", metavar="<input>", help="Input data")
+        parser.add_argument(
+            "--confidence-threshold",
+            type=float,
+            default=0.5,
+            help="Minimum score for instance predictions to be shown",
+        )
         parser.add_argument("--smooth_k", type=int, default=0, metavar="<smooth_k>", help="smooth_k")
         parser.add_argument(
             "--opts",
@@ -136,6 +143,7 @@ class InferenceAction(Action):
         cfg = get_cfg()
         add_densepose_config(cfg)
         add_hrnet_config(cfg)
+        add_adet_cfg(cfg, args)
         cfg.merge_from_file(config_fpath)
         cfg.merge_from_list(args.opts)
         if opts:
