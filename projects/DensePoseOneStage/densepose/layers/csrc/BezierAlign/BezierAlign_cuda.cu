@@ -368,7 +368,7 @@ __global__ void BezierAlignBackwardFeature(
   } // CUDA_1D_KERNEL_LOOP
 } // RoIAlignBackward
 
-namespace adet {
+namespace densepose {
 
 at::Tensor BezierAlign_forward_cuda(
     const at::Tensor& input,

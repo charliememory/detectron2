@@ -2,7 +2,7 @@
 #pragma once
 #include <torch/types.h>
 
-namespace adet {
+namespace densepose {
 
 at::Tensor BezierAlign_forward_cpu(
     const at::Tensor& input,

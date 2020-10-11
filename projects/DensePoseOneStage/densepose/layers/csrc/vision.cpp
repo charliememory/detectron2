@@ -4,7 +4,7 @@
 #include "DefROIAlign/DefROIAlign.h"
 #include "BezierAlign/BezierAlign.h"
 
-namespace adet {
+namespace densepose {
 
 #ifdef WITH_CUDA
 extern int get_cudart_version();
@@ -60,4 +60,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("bezier_align_backward", &BezierAlign_backward, "bezier_align_backward");
 }
 
-} // namespace adet
+} // namespace densepose

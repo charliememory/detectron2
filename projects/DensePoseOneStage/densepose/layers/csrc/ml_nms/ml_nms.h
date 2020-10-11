@@ -1,7 +1,7 @@
 #pragma once
 #include <torch/extension.h>
 
-namespace adet {
+namespace densepose {
 
 
 #ifdef WITH_CUDA
@@ -29,4 +29,4 @@ at::Tensor ml_nms(const at::Tensor& dets,
   AT_ERROR("CPU version not implemented");
 }
 
-} // namespace adet
+} // namespace densepose

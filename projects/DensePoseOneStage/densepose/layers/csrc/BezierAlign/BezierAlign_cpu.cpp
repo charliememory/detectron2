@@ -459,7 +459,7 @@ void BezierAlignBackward(
 
 } // namespace
 
-namespace adet {
+namespace densepose {
 
 at::Tensor BezierAlign_forward_cpu(
     const at::Tensor& input,
@@ -564,4 +564,4 @@ at::Tensor BezierAlign_backward_cpu(
   return grad_input;
 }
 
-} // namespace adet
+} // namespace densepose

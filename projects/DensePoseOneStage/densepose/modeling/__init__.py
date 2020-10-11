@@ -15,13 +15,13 @@ from .build import (
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import pdb
 # Just to register models from adet (not sure why there is an error about "already registered")
-try:
-	from .fcos import FCOS  
-except Exception as e:
-	print(e)
+# try:
+from .fcos import FCOS  
+# except Exception as e:
+# 	print(e)
 # from .blendmask import BlendMask
 # try:
-# 	from .backbone import build_fcos_resnet_fpn_backbone
+from .backbone import build_fcos_resnet_fpn_backbone
 # except Exception as e:
 # 	print(e)
 # from .one_stage_detector import OneStageDetector, OneStageRCNN
@@ -30,7 +30,7 @@ except Exception as e:
 # from .MEInst import MEInst
 
 # try:
-# 	from .condinst import condinst
+from .condinst import condinst
 # except Exception as e:
 # 	print(e)
 # pdb.set_trace()

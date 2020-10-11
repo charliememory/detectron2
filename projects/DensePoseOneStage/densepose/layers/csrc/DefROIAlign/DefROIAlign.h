@@ -1,7 +1,7 @@
 #pragma once
 #include <torch/types.h>
 
-namespace adet {
+namespace densepose {
 
 #ifdef WITH_CUDA
 at::Tensor DefROIAlign_forward_cuda(
@@ -104,4 +104,4 @@ inline at::Tensor DefROIAlign_backward(
   AT_ERROR("CPU version not supported");
 }
 
-} // namespace adet
+} // namespace densepose

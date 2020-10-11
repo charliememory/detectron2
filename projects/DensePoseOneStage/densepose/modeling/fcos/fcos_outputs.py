@@ -8,8 +8,10 @@ from detectron2.structures import Instances, Boxes
 from detectron2.utils.comm import get_world_size
 from fvcore.nn import sigmoid_focal_loss_jit
 
-from adet.utils.comm import reduce_sum
-from adet.layers import ml_nms, IOULoss
+# from adet.utils.comm import reduce_sum
+# from adet.layers import ml_nms, IOULoss
+from densepose.utils.comm import reduce_sum
+from densepose.layers import ml_nms, IOULoss
 
 
 logger = logging.getLogger(__name__)

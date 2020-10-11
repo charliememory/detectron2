@@ -70,7 +70,7 @@ __global__ void ml_nms_kernel(const int n_boxes, const float nms_overlap_thresh,
   }
 }
 
-namespace adet {
+namespace densepose {
 
 // boxes is a N x 6 tensor
 at::Tensor ml_nms_cuda(const at::Tensor boxes, const float nms_overlap_thresh) {
@@ -136,4 +136,4 @@ at::Tensor ml_nms_cuda(const at::Tensor boxes, const float nms_overlap_thresh) {
                      }).sort(0, false));
 }
 
-} // namespace adet
+} // namespace densepose

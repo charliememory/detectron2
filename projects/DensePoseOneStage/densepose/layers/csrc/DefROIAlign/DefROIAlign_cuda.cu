@@ -338,7 +338,7 @@ __global__ void DefRoIAlignBackwardFeature(
   } // CUDA_1D_KERNEL_LOOP
 } // RoIAlignBackward
 
-namespace adet {
+namespace densepose {
 
 at::Tensor DefROIAlign_forward_cuda(
     const at::Tensor& input,
@@ -473,4 +473,4 @@ at::Tensor DefROIAlign_backward_cuda(
   return grad_input;
 }
 
-} // namespace adet
+} // namespace densepose

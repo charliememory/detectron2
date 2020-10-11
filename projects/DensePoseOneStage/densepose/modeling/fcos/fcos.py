@@ -7,8 +7,10 @@ from torch.nn import functional as F
 from detectron2.layers import ShapeSpec, NaiveSyncBatchNorm
 from detectron2.modeling.proposal_generator.build import PROPOSAL_GENERATOR_REGISTRY
 
-from adet.layers import DFConv2d, NaiveGroupNorm
-from adet.utils.comm import compute_locations
+# from adet.layers import DFConv2d, NaiveGroupNorm
+# from adet.utils.comm import compute_locations
+from densepose.layers import DFConv2d, NaiveGroupNorm
+from densepose.utils.comm import compute_locations
 from .fcos_outputs import FCOSOutputs
 
 

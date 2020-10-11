@@ -17,8 +17,16 @@ source ~/.bashrc_liqianma
 
 cfg_name='densepose_CondInst_R_101_s1x'
 python train_net.py --config-file configs/${cfg_name}.yaml \
-    SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 OUTPUT_DIR ./output/${cfg_name}
-    # MODEL.WEIGHTS ../../pretrain/
+    SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 OUTPUT_DIR ./output/${cfg_name} \
+    --opts MODEL.WEIGHTS ../../pretrain/CondInst_MS_R_101_3x_sem.pth
+
+# python demo/demo.py \
+#     --config-file configs/CondInst/MS_R_101_3x_sem.yaml \
+# 	--video-input ${data_path}/youtube_multi_cut.mp4 \
+# 	--output ${out_dir} \
+# 	--confidence-threshold 0.3 \
+#     --opts MODEL.WEIGHTS ../../pretrain/CondInst_MS_R_101_3x_sem.pth
+
 
 # ./run_eval_dp.sh
 
