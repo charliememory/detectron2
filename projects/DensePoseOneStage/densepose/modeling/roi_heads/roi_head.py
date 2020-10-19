@@ -162,6 +162,7 @@ class DensePoseROIHeads(StandardROIHeads):
                 densepose_outputs, _, confidences, _ = self.densepose_predictor(
                     densepose_head_outputs
                 )
+                # pdb.set_trace()
                 densepose_loss_dict = self.densepose_losses(
                     proposals, densepose_outputs, confidences
                 )
@@ -385,6 +386,7 @@ class DensePoseROIHeads(StandardROIHeads):
         targets: Optional[List[Instances]] = None,
     ):
         instances, losses = super().forward(images, features, proposals, targets)
+        # pdb.set_trace()
         del targets, images
 
         if self.training:

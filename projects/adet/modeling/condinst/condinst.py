@@ -66,7 +66,6 @@ class CondInst(nn.Module):
             self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
         else:
             gt_instances = None
-
         mask_feats, sem_losses = self.mask_branch(features, gt_instances)
 
         proposals, proposal_losses = self.proposal_generator(

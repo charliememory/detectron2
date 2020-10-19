@@ -14,9 +14,9 @@ MODEL:
     THRESH_WITH_CTR: True
     USE_SCALE: True
   CONDINST:
-    MAX_PROPOSALS: 500
+    MAX_PROPOSALS: 300
 
-    
+
   # ANCHOR_GENERATOR:
   #   SIZES: [[32], [64], [128], [256], [512]]  # One size for each in feature map
   #   ASPECT_RATIOS: [[0.5, 1.0, 2.0]]  # Three aspect ratios (same for all in feature maps)
@@ -35,6 +35,7 @@ MODEL:
   #   NAME: "DensePoseROIHeads"
   #   IN_FEATURES: ["p2", "p3", "p4", "p5"]
   #   NUM_CLASSES: 1
+  NUM_CLASSES: 1
   # ROI_BOX_HEAD:
   #   NAME: "FastRCNNConvFCHead"
   #   NUM_FC: 2

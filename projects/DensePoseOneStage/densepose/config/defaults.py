@@ -209,7 +209,7 @@ _C.MODEL.CONDINST.MASK_OUT_STRIDE = 4
 _C.MODEL.CONDINST.MAX_PROPOSALS = -1
 
 _C.MODEL.CONDINST.MASK_HEAD = CN()
-_C.MODEL.CONDINST.MASK_HEAD.CHANNELS = 8*4 ## original: 8
+_C.MODEL.CONDINST.MASK_HEAD.CHANNELS = 8 ## original: 8
 _C.MODEL.CONDINST.MASK_HEAD.NUM_LAYERS = 3
 _C.MODEL.CONDINST.MASK_HEAD.USE_FP16 = False
 _C.MODEL.CONDINST.MASK_HEAD.DISABLE_REL_COORDS = False
@@ -218,9 +218,20 @@ _C.MODEL.CONDINST.MASK_BRANCH = CN()
 _C.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS = 8
 _C.MODEL.CONDINST.MASK_BRANCH.IN_FEATURES = ["p3", "p4", "p5"]
 _C.MODEL.CONDINST.MASK_BRANCH.CHANNELS = 128
-_C.MODEL.CONDINST.MASK_BRANCH.NORM = "BN"
+_C.MODEL.CONDINST.MASK_BRANCH.NORM = "GN" #"BN"
 _C.MODEL.CONDINST.MASK_BRANCH.NUM_CONVS = 4
 _C.MODEL.CONDINST.MASK_BRANCH.SEMANTIC_LOSS_ON = False
+
+# ---------------------------------------------------------------------------- #
+# CondInst added options
+# ---------------------------------------------------------------------------- #
+_C.MODEL.NUM_CLASSES = 1 # only background or foreground (person), from densepose MODEL.ROI_HEADS.NUM_CLASSES
+
+_C.MODEL.CONDINST.IUVHead = CN()
+_C.MODEL.CONDINST.IUVHead.OUT_CHANNELS = 25*3
+_C.MODEL.CONDINST.IUVHead.CHANNELS = 96
+_C.MODEL.CONDINST.IUVHead.NORM = "GN" #"BN"
+_C.MODEL.CONDINST.IUVHead.NUM_CONVS = 3
 
 # ---------------------------------------------------------------------------- #
 # TOP Module Options
@@ -243,3 +254,8 @@ _C.MODEL.BiFPN.NUM_REPEATS = 6
 
 # Options: "" (no norm), "GN"
 _C.MODEL.BiFPN.NORM = ""
+
+
+
+
+

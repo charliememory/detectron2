@@ -1,7 +1,7 @@
 from typing import Dict
 import math
 
-import torch
+import torch, pdb
 from torch import nn
 
 from fvcore.nn import sigmoid_focal_loss_jit
@@ -52,6 +52,7 @@ class MaskBranch(nn.Module):
         ))
         self.add_module('tower', nn.Sequential(*tower))
 
+        # pdb.set_trace()
         if self.sem_loss_on:
             num_classes = cfg.MODEL.FCOS.NUM_CLASSES
             self.focal_loss_alpha = cfg.MODEL.FCOS.LOSS_ALPHA

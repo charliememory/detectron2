@@ -21,6 +21,7 @@ from densepose.config import get_cfg, add_densepose_config
 # from densepose import add_densepose_config
 from densepose.engine import Trainer
 from densepose.modeling.densepose_checkpoint import DensePoseCheckpointer
+import pdb
 
 
 def setup(args):
@@ -40,6 +41,7 @@ def main(args):
     # disable strict kwargs checking: allow one to specify path handle
     # hints through kwargs, like timeout in DP evaluation
     PathManager.set_strict_kwargs_checking(False)
+    # pdb.set_trace()
 
     if args.eval_only:
         model = Trainer.build_model(cfg)

@@ -2,7 +2,7 @@
 Universe         = vanilla
 #Universe         = local
 # cpu
-RequestCpus      = 2
+RequestCpus      = 5
 # 4GB RAM needed, ask at least 2GB for tf.
 RequestMemory    = 14G  
 # One quarter of clock time
@@ -17,12 +17,13 @@ Request_GPUs = 1
 # CUDACapability should be 2 or higher
 # Requirements = ( CUDACapability >= 5 )&& ( machineowner == "Visics" )  ( machineowner == "Visics" ) &&
 #Requirements = ( machineowner == "Visics" ) &&  ( CUDAGlobalMemoryMb > 10000 )&& (machine != "vauxite.esat.kuleuven.be")
-Requirements = ( CUDAGlobalMemoryMb > 10000 )&& ( CUDACapability >= 5 )&& ( machineowner == "Visics" )&& (machine != "spchcl23.esat.kuleuven.be")&& (machine != "andromeda.esat.kuleuven.be") 
+Requirements = ( CUDAGlobalMemoryMb > 10000 )&& ( CUDACapability >= 5 )
+#&& ( machineowner == "Visics" )&& (machine != "spchcl23.esat.kuleuven.be")&& (machine != "andromeda.esat.kuleuven.be") 
 
 # Start directory
-Initialdir = /esat/diamond/liqianma/workspace/detectron2/projects/DensePose
+Initialdir = /users/visics/liqianma/workspace/Gitlab/detectron2/projects/DensePoseOneStage
 Executable = /bin/bash
-Arguments   = run_infer_dp.sh 
+Arguments   = run_train_dp_1.sh 
 
 Log          = ./condor/condor_01.log
 Output       = ./condor/condor_01.out
@@ -30,7 +31,7 @@ Error        = ./condor/condor_01.err
 
 #Getenv = True 
 #I'm a nice person, I think...
-#NiceUser = true
+NiceUser = true
 #Mail me only if something is wrong
 Notification = Error
 

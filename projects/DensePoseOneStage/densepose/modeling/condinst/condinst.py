@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import logging
+from typing import Dict, List, Optional
 
 import torch
 from torch import nn
@@ -15,9 +16,18 @@ from detectron2.structures.masks import PolygonMasks, polygons_to_bitmask
 
 from .dynamic_mask_head import build_dynamic_mask_head
 from .mask_branch import build_mask_branch
+from .iuv_head import build_iuv_head
 
 # from adet.utils.comm import aligned_bilinear
 from densepose.utils.comm import aligned_bilinear
+
+from .. import (
+    build_densepose_data_filter,
+    build_densepose_head,
+    build_densepose_losses,
+    build_densepose_predictor,
+    densepose_inference,
+)
 
 __all__ = ["CondInst"]
 
@@ -39,6 +49,10 @@ class CondInst(nn.Module):
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.mask_head = build_dynamic_mask_head(cfg)
         self.mask_branch = build_mask_branch(cfg, self.backbone.output_shape())
+        self.iuv_head = build_iuv_head(cfg)
+        self.iuv_fea_dim = cfg.MODEL.CONDINST.IUVHead.CHANNELS
+        self.s_ins_fea_dim = cfg.MODEL.CONDINST.MASK_HEAD.CHANNELS
+        assert self.iuv_fea_dim+self.s_ins_fea_dim == cfg.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS
         self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
         self.max_proposals = cfg.MODEL.CONDINST.MAX_PROPOSALS
 
@@ -55,10 +69,46 @@ class CondInst(nn.Module):
         pixel_mean = torch.Tensor(cfg.MODEL.PIXEL_MEAN).to(self.device).view(3, 1, 1)
         pixel_std = torch.Tensor(cfg.MODEL.PIXEL_STD).to(self.device).view(3, 1, 1)
         self.normalizer = lambda x: (x - pixel_mean) / pixel_std
+
+        self._init_densepose_head(cfg)
+
         self.to(self.device)
 
+    def _init_densepose_head(self, cfg):
+        # fmt: off
+        self.densepose_on          = cfg.MODEL.DENSEPOSE_ON
+        if not self.densepose_on:
+            return
+        self.densepose_data_filter = build_densepose_data_filter(cfg)
+        # dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_RESOLUTION
+        # dp_pooler_sampling_ratio   = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_SAMPLING_RATIO
+        # dp_pooler_type             = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_TYPE
+        # self.use_decoder           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ON
+        # fmt: on
+        # if self.use_decoder:
+        #     dp_pooler_scales = (1.0 / input_shape[self.in_features[0]].stride,)
+        # else:
+        #     dp_pooler_scales = tuple(1.0 / input_shape[k].stride for k in self.in_features)
+        # in_channels = [input_shape[f].channels for f in self.in_features][0]
+
+        # if self.use_decoder:
+        #     self.decoder = Decoder(cfg, input_shape, self.in_features)
+
+        # self.densepose_pooler = ROIPooler(
+        #     output_size=dp_pooler_resolution,
+        #     scales=dp_pooler_scales,
+        #     sampling_ratio=dp_pooler_sampling_ratio,
+        #     pooler_type=dp_pooler_type,
+        # )
+        # self.densepose_head = build_densepose_head(cfg, in_channels)
+        # self.densepose_predictor = build_densepose_predictor(
+        #     cfg, self.densepose_head.n_out_channels
+        # )
+        # self.densepose_losses = build_densepose_losses(cfg)
+
+    "TODO: convert raw input to detectron2.structures.instances.Instances to reuse densepose code"
     def forward(self, batched_inputs):
-        pdb.set_trace()
+        # pdb.set_trace()
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [self.normalizer(x) for x in images]
         images = ImageList.from_tensors(images, self.backbone.size_divisibility)
@@ -71,21 +121,40 @@ class CondInst(nn.Module):
             gt_instances = None
 
         mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+        iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
+        iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
+
+        # if torch.isnan(iuv_logits.mean()):
+        #     pdb.set_trace()
 
         proposals, proposal_losses = self.proposal_generator(
             images, features, gt_instances, self.controller
         )
 
         if self.training:
-            loss_mask = self._forward_mask_heads_train(proposals, mask_feats, gt_instances)
+            densepose_loss_dict = self._forward_mask_heads_train(proposals, s_ins_feats, iuv_logits, gt_instances)
+
+            # # instances = 
+            # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
 
             losses = {}
             losses.update(sem_losses)
             losses.update(proposal_losses)
-            losses.update({"loss_mask": loss_mask})
+            # losses.update({"loss_mask": loss_mask})
+            losses.update(densepose_loss_dict)
+
+            # print(losses)
+            # for k,v in losses.items():
+            #     if torch.isnan(v):
+            #         print(k,v)
+            #         pdb.set_trace()
+
             return losses
         else:
-            pred_instances_w_masks = self._forward_mask_heads_test(proposals, mask_feats)
+            pred_instances_w_masks = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_logits)
+
+            # # instances = 
+            # pred_instances_densepose = self._forward_densepose_test(mask_feats)
 
             padded_im_h, padded_im_w = images.tensor.size()[-2:]
             processed_results = []
@@ -105,7 +174,131 @@ class CondInst(nn.Module):
 
             return processed_results
 
-    def _forward_mask_heads_train(self, proposals, mask_feats, gt_instances):
+    # def forward_densepose(
+    #     self,
+    #     images: ImageList,
+    #     features: Dict[str, torch.Tensor],
+    #     proposals: List[Instances],
+    #     targets: Optional[List[Instances]] = None,
+    # ):
+    #     instances, losses = super().forward(images, features, proposals, targets)
+    #     pdb.set_trace()
+    #     del targets, images
+
+    #     if self.training:
+    #         losses.update(self._forward_densepose(features, instances))
+    #     return instances, losses
+
+    # def _forward_densepose(self, features: Dict[str, torch.Tensor], instances: List[Instances]):
+    #     """
+    #     Forward logic of the densepose prediction branch.
+    #     Args:
+    #         features (dict[str, Tensor]): input data as a mapping from feature
+    #             map name to tensor. Axis 0 represents the number of images `N` in
+    #             the input data; axes 1-3 are channels, height, and width, which may
+    #             vary between feature maps (e.g., if a feature pyramid is used).
+    #         instances (list[Instances]): length `N` list of `Instances`. The i-th
+    #             `Instances` contains instances for the i-th input image,
+    #             In training, they can be the proposals.
+    #             In inference, they can be the predicted boxes.
+    #     Returns:
+    #         In training, a dict of losses.
+    #         In inference, update `instances` with new fields "densepose" and return it.
+    #     """
+    #     if not self.densepose_on:
+    #         return {} if self.training else instances
+
+    #     features = [features[f] for f in self.in_features]
+    #     if self.training:
+    #         proposals, _ = select_foreground_proposals(instances, self.num_classes)
+    #         features, proposals = self.densepose_data_filter(features, proposals)
+    #         pdb.set_trace()
+    #         if len(proposals) > 0:
+    #             proposal_boxes = [x.proposal_boxes for x in proposals]
+
+    #             if self.use_decoder:
+    #                 features = [self.decoder(features)]
+
+    #             features_dp = self.densepose_pooler(features, proposal_boxes)
+    #             densepose_head_outputs = self.densepose_head(features_dp)
+    #             densepose_outputs, _, confidences, _ = self.densepose_predictor(
+    #                 densepose_head_outputs
+    #             )
+    #             densepose_loss_dict = self.densepose_losses(
+    #                 proposals, densepose_outputs, confidences
+    #             )
+    #             return densepose_loss_dict
+    #     else:
+    #         pred_boxes = [x.pred_boxes for x in instances]
+
+    #         if self.use_decoder:
+    #             features = [self.decoder(features)]
+
+    #         features_dp = self.densepose_pooler(features, pred_boxes)
+    #         if len(features_dp) > 0:
+    #             densepose_head_outputs = self.densepose_head(features_dp)
+    #             densepose_outputs, _, confidences, _ = self.densepose_predictor(
+    #                 densepose_head_outputs
+    #             )
+    #         else:
+    #             # If no detection occurred instances
+    #             # set densepose_outputs to empty tensors
+    #             empty_tensor = torch.zeros(size=(0, 0, 0, 0), device=features_dp.device)
+    #             densepose_outputs = tuple([empty_tensor] * 4)
+    #             confidences = tuple([empty_tensor] * 6)
+
+    #         densepose_inference(densepose_outputs, confidences, instances)
+    #         return instances
+
+    # def forward_instance(self, batched_inputs):
+    #     pdb.set_trace()
+    #     images = [x["image"].to(self.device) for x in batched_inputs]
+    #     images = [self.normalizer(x) for x in images]
+    #     images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+    #     features = self.backbone(images.tensor)
+
+    #     if "instances" in batched_inputs[0]:
+    #         gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+    #         self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
+    #     else:
+    #         gt_instances = None
+
+    #     mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+
+    #     proposals, proposal_losses = self.proposal_generator(
+    #         images, features, gt_instances, self.controller
+    #     )
+
+    #     if self.training:
+    #         loss_mask = self._forward_mask_heads_train(proposals, mask_feats, gt_instances)
+
+    #         losses = {}
+    #         losses.update(sem_losses)
+    #         losses.update(proposal_losses)
+    #         losses.update({"loss_mask": loss_mask})
+    #         return losses
+    #     else:
+    #         pred_instances_w_masks = self._forward_mask_heads_test(proposals, mask_feats)
+
+    #         padded_im_h, padded_im_w = images.tensor.size()[-2:]
+    #         processed_results = []
+    #         for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
+    #             height = input_per_image.get("height", image_size[0])
+    #             width = input_per_image.get("width", image_size[1])
+
+    #             instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
+    #             instances_per_im = self.postprocess(
+    #                 instances_per_im, height, width,
+    #                 padded_im_h, padded_im_w
+    #             )
+
+    #             processed_results.append({
+    #                 "instances": instances_per_im
+    #             })
+
+    #         return processed_results
+
+    def _forward_mask_heads_train(self, proposals, mask_feats, iuv_logits, gt_instances):
         # prepare the inputs for mask heads
         pred_instances = proposals["instances"]
 
@@ -119,13 +312,13 @@ class CondInst(nn.Module):
         pred_instances.mask_head_params = pred_instances.top_feats
 
         loss_mask = self.mask_head(
-            mask_feats, self.mask_branch.out_stride,
+            mask_feats, iuv_logits, self.mask_branch.out_stride,
             pred_instances, gt_instances
         )
 
         return loss_mask
 
-    def _forward_mask_heads_test(self, proposals, mask_feats):
+    def _forward_mask_heads_test(self, proposals, mask_feats, iuv_logits):
         # prepare the inputs for mask heads
         for im_id, per_im in enumerate(proposals):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
@@ -133,7 +326,7 @@ class CondInst(nn.Module):
         pred_instances.mask_head_params = pred_instances.top_feat
 
         pred_instances_w_masks = self.mask_head(
-            mask_feats, self.mask_branch.out_stride, pred_instances
+            mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
         )
 
         return pred_instances_w_masks
