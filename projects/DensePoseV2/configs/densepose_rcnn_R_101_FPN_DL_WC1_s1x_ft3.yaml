@@ -1,0 +1,22 @@
+_BASE_: "Base-DensePose-RCNN-FPN.yaml"
+MODEL:
+  WEIGHTS: "./model_final_f359f3.pkl"
+  RESNETS:
+    DEPTH: 101
+  ROI_DENSEPOSE_HEAD:
+    NAME: "DensePoseDeepLabHead"
+    UV_CONFIDENCE:
+      ENABLED: True
+      TYPE: "iid_iso"
+    POINT_REGRESSION_WEIGHTS: 0.0005
+SOLVER:
+  CLIP_GRADIENTS:
+    ENABLED: True
+  MAX_ITER: 130000
+  STEPS: (100000, 120000)
+
+DATASETS:
+  TRAIN: ("densepose_coco_2014_train", "densepose_coco_2014_valminusminival", 
+      "densepose_coco_2014_minival", "posetrack2017_train")
+  TEST: ("posetrack2017_val",) 
+  # TEST: ("densepose_coco_2014_minival",) 
