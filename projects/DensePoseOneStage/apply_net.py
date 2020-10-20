@@ -17,8 +17,8 @@ from detectron2.structures.boxes import BoxMode
 from detectron2.structures.instances import Instances
 from detectron2.utils.logger import setup_logger
 
-from densepose.config import get_cfg
-from densepose import add_densepose_config, add_hrnet_config, add_adet_cfg
+from densepose.config import get_cfg, add_densepose_config, add_hrnet_config
+# from densepose import add_densepose_config, add_hrnet_config, add_adet_cfg
 from densepose.utils.logger import verbosity_to_level
 from densepose.vis.base import CompoundVisualizer
 from densepose.vis.bounding_box import ScoredBoundingBoxVisualizer

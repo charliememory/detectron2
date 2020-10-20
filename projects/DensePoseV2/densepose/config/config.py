@@ -1,7 +1,16 @@
-# -*- coding = utf-8 -*-
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-
 from detectron2.config import CfgNode as CN
+
+
+def get_cfg() -> CN:
+    """
+    Get a copy of the default config.
+
+    Returns:
+        a detectron2 CfgNode instance.
+    """
+    from .defaults import _C
+
+    return _C.clone()
 
 
 def add_dataset_category_config(cfg: CN):
@@ -87,7 +96,7 @@ def add_densepose_head_config(cfg: CN):
     _C.MODEL.ROI_DENSEPOSE_HEAD.POOLER_TYPE = "ROIAlignV2"
     _C.MODEL.ROI_DENSEPOSE_HEAD.POOLER_RESOLUTION = 28
     _C.MODEL.ROI_DENSEPOSE_HEAD.POOLER_SAMPLING_RATIO = 2
-    _C.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS = 2  # 15 or 2
+    _C.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS = 1  # 15 or 2 or 1
     # Overlap threshold for an RoI to be considered foreground (if >= FG_IOU_THRESHOLD)
     _C.MODEL.ROI_DENSEPOSE_HEAD.FG_IOU_THRESHOLD = 0.7
     # Loss weights for annotation masks.(14 Parts)
@@ -175,9 +184,52 @@ def add_hrnet_config(cfg: CN):
     _C.MODEL.HRNET.HRFPN = CN()
     _C.MODEL.HRNET.HRFPN.OUT_CHANNELS = 256
 
+    
+def add_hrnet_config(cfg: CN):
+    """
+    Add config for HRNet backbone.
+    """
+    _C = cfg
+
+    # For HigherHRNet w32
+    _C.MODEL.HRNET = CN()
+    _C.MODEL.HRNET.STEM_INPLANES = 64
+    _C.MODEL.HRNET.STAGE2 = CN()
+    _C.MODEL.HRNET.STAGE2.NUM_MODULES = 1
+    _C.MODEL.HRNET.STAGE2.NUM_BRANCHES = 2
+    _C.MODEL.HRNET.STAGE2.BLOCK = "BASIC"
+    _C.MODEL.HRNET.STAGE2.NUM_BLOCKS = [4, 4]
+    _C.MODEL.HRNET.STAGE2.NUM_CHANNELS = [32, 64]
+    _C.MODEL.HRNET.STAGE2.FUSE_METHOD = "SUM"
+    _C.MODEL.HRNET.STAGE3 = CN()
+    _C.MODEL.HRNET.STAGE3.NUM_MODULES = 4
+    _C.MODEL.HRNET.STAGE3.NUM_BRANCHES = 3
+    _C.MODEL.HRNET.STAGE3.BLOCK = "BASIC"
+    _C.MODEL.HRNET.STAGE3.NUM_BLOCKS = [4, 4, 4]
+    _C.MODEL.HRNET.STAGE3.NUM_CHANNELS = [32, 64, 128]
+    _C.MODEL.HRNET.STAGE3.FUSE_METHOD = "SUM"
+    _C.MODEL.HRNET.STAGE4 = CN()
+    _C.MODEL.HRNET.STAGE4.NUM_MODULES = 3
+    _C.MODEL.HRNET.STAGE4.NUM_BRANCHES = 4
+    _C.MODEL.HRNET.STAGE4.BLOCK = "BASIC"
+    _C.MODEL.HRNET.STAGE4.NUM_BLOCKS = [4, 4, 4, 4]
+    _C.MODEL.HRNET.STAGE4.NUM_CHANNELS = [32, 64, 128, 256]
+    _C.MODEL.HRNET.STAGE4.FUSE_METHOD = "SUM"
+
+    _C.MODEL.HRNET.HRFPN = CN()
+    _C.MODEL.HRNET.HRFPN.OUT_CHANNELS = 256
+
+def add_adet_cfg(cfg: CN, args):
+    # Set score_threshold for builtin models
+    cfg.MODEL.RETINANET.SCORE_THRESH_TEST = args.confidence_threshold
+    cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = args.confidence_threshold
+    cfg.MODEL.FCOS.INFERENCE_TH_TEST = args.confidence_threshold
+    cfg.MODEL.MEInst.INFERENCE_TH_TEST = args.confidence_threshold
+    cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
 
 def add_densepose_config(cfg: CN):
     add_densepose_head_config(cfg)
     add_hrnet_config(cfg)
     add_bootstrap_config(cfg)
     add_dataset_category_config(cfg)
+

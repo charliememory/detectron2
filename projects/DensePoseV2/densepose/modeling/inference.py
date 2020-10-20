@@ -41,3 +41,21 @@ def densepose_inference(densepose_predictor_output: Any, detections: List[Instan
                 output_i_dict[field.name] = field_value
         detection_i.pred_densepose = PredictorOutput(**output_i_dict)
         k += n_i
+
+
+# def densepose_inference(densepose_predictor_output: Any, detections: List[Instances]):
+#     """
+#     Splits DensePose predictor outputs into chunks, each chunk corresponds to
+#     detections on one image. Predictor output chunks are stored in `pred_densepose`
+#     attribute of the corresponding `Instances` object.
+
+#     Args:
+#         densepose_predictor_output: a dataclass instance (can be of different types,
+#             depending on predictor used for inference). Each field can be `None`
+#             (if the corresponding output was not inferred) or a tensor of size
+#             [N, ...], where N = N_1 + N_2 + .. + N_k is a total number of
+#             detections on all images, N_1 is the number of detections on image 1,
+#             N_2 is the number of detections on image 2, etc.
+#         detections: a list of objects of type `Instance`, k-th object corresponds
+#             to detections on k-th image.
+#     """

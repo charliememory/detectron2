@@ -10,6 +10,14 @@ MODEL:
       CHANNELS: 96
     MASK_HEAD:
       CHANNELS: 8
+
+  
+  ROI_DENSEPOSE_HEAD:
+    # PREDICTOR_NAME: "DensePoseChartWithConfidencePredictor"
+    # LOSS_NAME: "DensePoseChartWithConfidenceLoss"
+    PREDICTOR_NAME: "DensePoseChartPredictor"
+    LOSS_NAME: "DensePoseChartGlobalIUVSeparatedSLoss"
+    NUM_COARSE_SEGM_CHANNELS: 1
 SOLVER:
   MAX_ITER: 130000
   STEPS: (100000, 120000)

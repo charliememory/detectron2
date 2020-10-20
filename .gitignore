@@ -53,3 +53,4 @@ wheels/
 /projects/DensePose*/*.png
 /projects/DensePose*/*.sh
 /projects/DensePose*/tmp
+*.DS_Store

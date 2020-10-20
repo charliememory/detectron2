@@ -354,7 +354,7 @@ class BilinearInterpolationHelper:
 
         return torch.cat(z_est_sampled_all,dim=-1)
 
-    def extract_at_points_indiS(
+    def extract_at_points_separatedS(
         self,
         z_est,
         slice_index_uv=None,
@@ -1062,7 +1062,7 @@ class DensePoseLosses(object):
             
             s_gt = tensors_helper.s_gt
             s = s[tensors_helper.i_with_dp]
-            s_est = interpolator.extract_at_points_indiS(
+            s_est = interpolator.extract_at_points_separatedS(
                 s,
                 slice_index_uv=slice(None),
                 mode='nearest',

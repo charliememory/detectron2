@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 from typing import Dict, List
-import torch
+import torch, pdb
 from torch.nn import functional as F
 
 from detectron2.structures import Instances
@@ -109,6 +109,10 @@ class SingleTensorsHelper:
                 v_gt,
                 coarse_segm_gt,
                 index_bbox,
+                index_img_per_ins,
+                i_height,
+                i_width,
+                gt_pointnum_per_ins,
             ) = _extract_single_tensors_from_matches(proposals_with_gt)
 
         for k, v in locals().items():
@@ -226,6 +230,207 @@ class BilinearInterpolationHelper:
         )
         return z_est_sampled
 
+    @staticmethod
+    def from_matches_diffHW(tensors_helper):
+        """
+        Define biliner sampling location and weights according to tensors_helper.
+        """
+        x0_gt, y0_gt, w_gt, h_gt = tensors_helper.bbox_xywh_gt.clone()[tensors_helper.index_bbox].unbind(1)
+        x0_est, y0_est, w_est, h_est = tensors_helper.bbox_xywh_est[
+            tensors_helper.index_bbox
+        ].unbind(dim=1)
+
+        x_lo_list, x_hi_list, x_w_list = [], [], []
+        y_lo_list, y_hi_list, y_w_list = [], [], []
+        j_valid_list, w_ylo_xlo_list, w_ylo_xhi_list, w_yhi_xlo_list, w_yhi_xhi_list = [], [], [], [], []
+
+        # index_bbox = tensors_helper.index_bbox
+
+        start = 0
+        for idx, pointnum in enumerate(tensors_helper.gt_pointnum_per_ins):
+            end = start + pointnum
+
+            img_idx = tensors_helper.index_img_per_ins[idx]
+            zh, zw = h_gt[start], w_gt[start]
+            # zh, zw = zh.round(), zw.round()
+
+            x_lo, x_hi, x_w, jx_valid = _linear_interpolation_utilities(
+                tensors_helper.x_norm[start:end], x0_gt[start:end], w_gt[start:end], x0_est[start:end], w_est[start:end], zw
+            )
+            y_lo, y_hi, y_w, jy_valid = _linear_interpolation_utilities(
+                tensors_helper.y_norm[start:end], y0_gt[start:end], h_gt[start:end], y0_est[start:end], h_est[start:end], zh
+            )
+            j_valid = jx_valid * jy_valid
+
+            w_ylo_xlo = (1.0 - x_w) * (1.0 - y_w)
+            w_ylo_xhi = x_w * (1.0 - y_w)
+            w_yhi_xlo = (1.0 - x_w) * y_w
+            w_yhi_xhi = x_w * y_w
+
+            x_lo_list.append(x_lo)
+            x_hi_list.append(x_hi)
+            x_w_list.append(x_w)
+            y_lo_list.append(y_lo)
+            y_hi_list.append(y_hi)
+            y_w_list.append(y_w)
+            j_valid_list.append(j_valid)
+            w_ylo_xlo_list.append(w_ylo_xlo)
+            w_ylo_xhi_list.append(w_ylo_xhi)
+            w_yhi_xlo_list.append(w_yhi_xlo)
+            w_yhi_xhi_list.append(w_yhi_xhi)
+
+            start = end
+
+            # if x_lo.max()>zw:
+            #     pdb.set_trace()
+
+        j_valid = torch.cat(j_valid_list)
+        y_lo = torch.cat(y_lo_list)
+        y_hi = torch.cat(y_hi_list)
+        x_lo = torch.cat(x_lo_list)
+        x_hi = torch.cat(x_hi_list)
+        w_ylo_xlo = torch.cat(w_ylo_xlo_list)
+        w_ylo_xhi = torch.cat(w_ylo_xhi_list)
+        w_yhi_xlo = torch.cat(w_yhi_xlo_list)
+        w_yhi_xhi = torch.cat(w_yhi_xhi_list)
+
+        return BilinearInterpolationHelper(
+            tensors_helper,
+            j_valid,
+            y_lo,
+            y_hi,
+            x_lo,
+            x_hi,
+            w_ylo_xlo,
+            w_ylo_xhi,
+            w_yhi_xlo,
+            w_yhi_xhi,
+        )
+
+    def extract_at_points_globalIUV_diffHW(
+        self,
+        z_est,
+        slice_fine_segm=None,
+        w_ylo_xlo=None,
+        w_ylo_xhi=None,
+        w_yhi_xlo=None,
+        w_yhi_xhi=None,
+        mode='bilinear',
+    ):
+        """
+        Extract ground truth values z_gt for valid point indices and estimated
+        values z_est using bilinear interpolation over top-left (y_lo, x_lo),
+        top-right (y_lo, x_hi), bottom-left (y_hi, x_lo) and bottom-right
+        (y_hi, x_hi) values in z_est with corresponding weights:
+        w_ylo_xlo, w_ylo_xhi, w_yhi_xlo and w_yhi_xhi.
+        Use slice_index_uv to slice dim=1 in z_est
+        """
+        # index_gt_all = self.tensors_helper.index_gt_all
+        # slice_index_uv = index_gt_all if slice_index_uv is None else slice_index_uv
+        slice_fine_segm = (
+            self.tensors_helper.fine_segm_labels_gt if slice_fine_segm is None else slice_fine_segm
+        )
+        w_ylo_xlo = self.w_ylo_xlo if w_ylo_xlo is None else w_ylo_xlo
+        w_ylo_xhi = self.w_ylo_xhi if w_ylo_xhi is None else w_ylo_xhi
+        w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
+        w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
+
+        assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
+        x0_gt, y0_gt, w_gt, h_gt = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox].unbind(1)
+        index_bbox = self.tensors_helper.index_bbox
+        z_est_sampled_all = []
+        start = 0
+        for idx, pointnum in enumerate(self.tensors_helper.gt_pointnum_per_ins):
+            end = start + pointnum
+            img_idx = self.tensors_helper.index_img_per_ins[idx]
+            logitH, logitW = z_est.shape[-2], z_est.shape[-1]
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+            x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
+            sample_size = 256
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
+            z_est_ins = _resample_data_v2(z_est[img_idx:img_idx+1], 
+                                       bbox_xywh_out=bbox_xywh_out, 
+                                       bbox_xywh_in=bbox_xywh_in,  
+                                       wout=w.round().int(), hout=h.round().int(), 
+                                       mode=mode)
+            if slice_fine_segm==slice(None):
+                z_est_sampled = (
+                      z_est_ins[0, slice(None), self.y_lo[start:end], self.x_lo[start:end]] * w_ylo_xlo[start:end]
+                    + z_est_ins[0, slice(None), self.y_lo[start:end], self.x_hi[start:end]] * w_ylo_xhi[start:end]
+                    + z_est_ins[0, slice(None), self.y_hi[start:end], self.x_lo[start:end]] * w_yhi_xlo[start:end]
+                    + z_est_ins[0, slice(None), self.y_hi[start:end], self.x_hi[start:end]] * w_yhi_xhi[start:end]
+                )
+            else:
+                z_est_sampled = (
+                      z_est_ins[0, slice_fine_segm[start:end], self.y_lo[start:end], self.x_lo[start:end]] * w_ylo_xlo[start:end]
+                    + z_est_ins[0, slice_fine_segm[start:end], self.y_lo[start:end], self.x_hi[start:end]] * w_ylo_xhi[start:end]
+                    + z_est_ins[0, slice_fine_segm[start:end], self.y_hi[start:end], self.x_lo[start:end]] * w_yhi_xlo[start:end]
+                    + z_est_ins[0, slice_fine_segm[start:end], self.y_hi[start:end], self.x_hi[start:end]] * w_yhi_xhi[start:end]
+                )
+            z_est_sampled_all.append(z_est_sampled)
+
+            start = end
+
+        return torch.cat(z_est_sampled_all,dim=-1)
+
+    def extract_at_points_separatedS(
+        self,
+        z_est,
+        slice_fine_segm=None,
+        w_ylo_xlo=None,
+        w_ylo_xhi=None,
+        w_yhi_xlo=None,
+        w_yhi_xhi=None,
+        mode='bilinear',
+    ):
+        """
+        Extract ground truth values z_gt for valid point indices and estimated
+        values z_est using bilinear interpolation over top-left (y_lo, x_lo),
+        top-right (y_lo, x_hi), bottom-left (y_hi, x_lo) and bottom-right
+        (y_hi, x_hi) values in z_est with corresponding weights:
+        w_ylo_xlo, w_ylo_xhi, w_yhi_xlo and w_yhi_xhi.
+        Use slice_index_uv to slice dim=1 in z_est
+        """
+        # index_gt_all = self.tensors_helper.index_gt_all
+        # slice_index_uv = index_gt_all if slice_index_uv is None else slice_index_uv
+        # slice_fine_segm = (
+        #     self.tensors_helper.fine_segm_labels_gt if slice_fine_segm is None else slice_fine_segm
+        # )
+        w_ylo_xlo = self.w_ylo_xlo if w_ylo_xlo is None else w_ylo_xlo
+        w_ylo_xhi = self.w_ylo_xhi if w_ylo_xhi is None else w_ylo_xhi
+        w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
+        w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
+
+        assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
+        x0_gt, y0_gt, w_gt, h_gt = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox].unbind(1)
+        index_bbox = self.tensors_helper.index_bbox
+        z_est_sampled_all = []
+        start = 0
+        for idx, pointnum in enumerate(self.tensors_helper.gt_pointnum_per_ins):
+            end = start + pointnum
+            img_idx = self.tensors_helper.index_img_per_ins[idx]
+            logitH, logitW = z_est.shape[-2], z_est.shape[-1]
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+            x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
+            sample_size = 256
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
+
+            z_est_ins = _resample_data_v2(z_est[idx:idx+1], 
+                                       bbox_xywh_out=bbox_xywh_out, 
+                                       bbox_xywh_in=bbox_xywh_in,  
+                                       wout=sample_size, hout=sample_size, 
+                                       mode=mode)
+            z_est_sampled = z_est_ins
+            z_est_sampled_all.append(z_est_sampled)
+
+            start = end
+
+        return torch.cat(z_est_sampled_all,dim=0)
+
 
 def resample_data(
     z, bbox_xywh_src, bbox_xywh_dst, wout, hout, mode="nearest", padding_mode="zeros"
@@ -262,6 +467,57 @@ def resample_data(
     dy_expanded = (y1dst_norm - y0dst_norm)[:, None, None].expand(n, hout, wout)
     x0_expanded = x0dst_norm[:, None, None].expand(n, hout, wout)
     y0_expanded = y0dst_norm[:, None, None].expand(n, hout, wout)
+    grid_x = grid_w_expanded * dx_expanded + x0_expanded
+    grid_y = grid_h_expanded * dy_expanded + y0_expanded
+    grid = torch.stack((grid_x, grid_y), dim=3)
+    # resample Z from (N, C, H, W) into (N, C, Hout, Wout)
+    zresampled = F.grid_sample(z, grid, mode=mode, padding_mode=padding_mode, align_corners=True)
+    return zresampled
+
+
+def _resample_data_v2(
+    z, bbox_xywh_out, bbox_xywh_in, wout, hout, mode="nearest", padding_mode="zeros"
+):
+    """
+    Note: 
+    1) bbox_xywh_out is the final output bbox, bbox_xywh_in is where to sample the
+    pixels, i.e. flow's destination. 
+    2) The difference in this v2 function is "z_w, z_h is used for normalization instead of wsrc, hsrc"
+    """
+    """
+    Args:
+        z (:obj: `torch.Tensor`): tensor of size (N,C,H,W) with data to be
+            resampled
+        bbox_xywh_out (:obj: `torch.Tensor`): tensor of size (N,4) containing
+            source bounding boxes in format XYWH
+        bbox_xywh_in (:obj: `torch.Tensor`): tensor of size (N,4) containing
+            destination bounding boxes in format XYWH
+    Return:
+        zresampled (:obj: `torch.Tensor`): tensor of size (N, C, Hout, Wout)
+            with resampled values of z, where D is the discretization size
+    """
+    n = bbox_xywh_out.size(0)
+    assert n == bbox_xywh_in.size(0), (
+        "The number of "
+        "source ROIs for resampling ({}) should be equal to the number "
+        "of destination ROIs ({})".format(bbox_xywh_out.size(0), bbox_xywh_in.size(0))
+    )
+    x0src, y0src, wsrc, hsrc = bbox_xywh_out.unbind(dim=1)
+    x0dst, y0dst, wdst, hdst = bbox_xywh_in.unbind(dim=1)
+    z_h, z_w = z.shape[-2:]
+    x0dst_norm = 2 * (x0dst - x0src) / z_w - 1
+    y0dst_norm = 2 * (y0dst - y0src) / z_h - 1
+    x1dst_norm = 2 * (x0dst + wdst - x0src) / z_w - 1
+    y1dst_norm = 2 * (y0dst + hdst - y0src) / z_h - 1
+    grid_w = torch.arange(wout, device=z.device, dtype=torch.float) / wout
+    grid_h = torch.arange(hout, device=z.device, dtype=torch.float) / hout
+    grid_w_expanded = grid_w[None, None, :].expand(n, hout, wout)
+    grid_h_expanded = grid_h[None, :, None].expand(n, hout, wout)
+    dx_expanded = (x1dst_norm - x0dst_norm)[:, None, None].expand(n, hout, wout)
+    dy_expanded = (y1dst_norm - y0dst_norm)[:, None, None].expand(n, hout, wout)
+    x0_expanded = x0dst_norm[:, None, None].expand(n, hout, wout)
+    y0_expanded = y0dst_norm[:, None, None].expand(n, hout, wout)
+
     grid_x = grid_w_expanded * dx_expanded + x0_expanded
     grid_y = grid_h_expanded * dy_expanded + y0_expanded
     grid = torch.stack((grid_x, grid_y), dim=3)
@@ -330,6 +586,85 @@ def _extract_single_tensors_from_matches_one_image(
     )
 
 
+# def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]):
+#     i_img = []
+#     i_gt_all = []
+#     x_norm_all = []
+#     y_norm_all = []
+#     u_gt_all = []
+#     v_gt_all = []
+#     s_gt_all = []
+#     bbox_xywh_gt_all = []
+#     bbox_xywh_est_all = []
+#     i_bbox_all = []
+#     i_with_dp_all = []
+#     n = 0
+#     for i, proposals_targets_per_image in enumerate(proposals_with_targets):
+#         n_i = proposals_targets_per_image.proposal_boxes.tensor.size(0)
+#         if not n_i:
+#             continue
+#         (
+#             i_gt_img,
+#             x_norm_img,
+#             y_norm_img,
+#             u_gt_img,
+#             v_gt_img,
+#             s_gt_img,
+#             bbox_xywh_gt_img,
+#             bbox_xywh_est_img,
+#             i_bbox_img,
+#             i_with_dp_img,
+#         ) = _extract_single_tensors_from_matches_one_image(  # noqa
+#             proposals_targets_per_image, len(i_with_dp_all), n
+#         )
+#         i_gt_all.extend(i_gt_img)
+#         x_norm_all.extend(x_norm_img)
+#         y_norm_all.extend(y_norm_img)
+#         u_gt_all.extend(u_gt_img)
+#         v_gt_all.extend(v_gt_img)
+#         s_gt_all.extend(s_gt_img)
+#         bbox_xywh_gt_all.extend(bbox_xywh_gt_img)
+#         bbox_xywh_est_all.extend(bbox_xywh_est_img)
+#         i_bbox_all.extend(i_bbox_img)
+#         i_with_dp_all.extend(i_with_dp_img)
+#         i_img.extend([i] * len(i_with_dp_img))
+#         n += n_i
+#     # concatenate all data into a single tensor
+#     if (n > 0) and (len(i_with_dp_all) > 0):
+#         i_gt = torch.cat(i_gt_all, 0).long()
+#         x_norm = torch.cat(x_norm_all, 0)
+#         y_norm = torch.cat(y_norm_all, 0)
+#         u_gt = torch.cat(u_gt_all, 0)
+#         v_gt = torch.cat(v_gt_all, 0)
+#         s_gt = torch.cat(s_gt_all, 0)
+#         bbox_xywh_gt = torch.cat(bbox_xywh_gt_all, 0)
+#         bbox_xywh_est = torch.cat(bbox_xywh_est_all, 0)
+#         i_bbox = torch.cat(i_bbox_all, 0).long()
+#     else:
+#         i_gt = None
+#         x_norm = None
+#         y_norm = None
+#         u_gt = None
+#         v_gt = None
+#         s_gt = None
+#         bbox_xywh_gt = None
+#         bbox_xywh_est = None
+#         i_bbox = None
+#     return (
+#         i_img,
+#         i_with_dp_all,
+#         bbox_xywh_est,
+#         bbox_xywh_gt,
+#         i_gt,
+#         x_norm,
+#         y_norm,
+#         u_gt,
+#         v_gt,
+#         s_gt,
+#         i_bbox,
+#     )
+    
+
 def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]):
     i_img = []
     i_gt_all = []
@@ -342,6 +677,10 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
     bbox_xywh_est_all = []
     i_bbox_all = []
     i_with_dp_all = []
+    i_img_per_ins_all = []
+    img_height_all = []
+    img_width_all = []
+    gt_pointnum_per_ins_all = []
     n = 0
     for i, proposals_targets_per_image in enumerate(proposals_with_targets):
         n_i = proposals_targets_per_image.proposal_boxes.tensor.size(0)
@@ -372,6 +711,11 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
         i_bbox_all.extend(i_bbox_img)
         i_with_dp_all.extend(i_with_dp_img)
         i_img.extend([i] * len(i_with_dp_img))
+        i_img_per_ins_all.extend([torch.ones_like(bb)*i for bb in i_bbox_img])
+        H, W = proposals_targets_per_image._image_size
+        img_height_all.extend([H])
+        img_width_all.extend([W])
+        gt_pointnum_per_ins_all.extend([u.shape[0] for u in u_gt_img])
         n += n_i
     # concatenate all data into a single tensor
     if (n > 0) and (len(i_with_dp_all) > 0):
@@ -384,6 +728,10 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
         bbox_xywh_gt = torch.cat(bbox_xywh_gt_all, 0)
         bbox_xywh_est = torch.cat(bbox_xywh_est_all, 0)
         i_bbox = torch.cat(i_bbox_all, 0).long()
+        i_img_per_ins = torch.cat(i_img_per_ins_all, 0).long()
+        i_height = img_height_all #torch.stack(img_height_all)
+        i_width = img_width_all #torch.stack(img_width_all, 0)
+        gt_pointnum_per_ins = gt_pointnum_per_ins_all
     else:
         i_gt = None
         x_norm = None
@@ -394,6 +742,10 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
         bbox_xywh_gt = None
         bbox_xywh_est = None
         i_bbox = None
+        i_img_per_ins = None
+        i_height = None
+        i_width = None
+        gt_pointnum_per_ins = None
     return (
         i_img,
         i_with_dp_all,
@@ -406,4 +758,10 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
         v_gt,
         s_gt,
         i_bbox,
+        i_img_per_ins,
+        i_height,
+        i_width,
+        gt_pointnum_per_ins,
     )
+
+
