@@ -75,17 +75,18 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
                 * loss_densepose_V: loss for V coordinates (smooth L1)
         """
 
-        if self.n_segm_chan==1:
-            assert self.segm_trained_by_masks
-            losses_densepose = self.produce_densepose_losses(
-                proposals_with_gt, densepose_predictor_outputs
-            )
-            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm.sigmoid(), gt_bitmasks)
-            losses_mask = {"loss_densepose_S": loss_mask.mean() * self.w_segm}
-            return {**losses_densepose, **losses_mask}
-        elif self.n_segm_chan==2:
-            assert not self.segm_trained_by_masks
-            return self.produce_densepose_losses(proposals_with_gt, densepose_predictor_outputs)
+        # if self.n_segm_chan==1:
+        #     assert self.segm_trained_by_masks
+        #     losses_densepose = self.produce_densepose_losses(
+        #         proposals_with_gt, densepose_predictor_outputs
+        #     )
+        #     loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm.sigmoid(), gt_bitmasks)
+        #     losses_mask = {"loss_densepose_S": loss_mask.mean() * self.w_segm}
+        #     pdb.set_trace()
+        #     return {**losses_densepose, **losses_mask}
+        # elif self.n_segm_chan==2:
+        #     assert not self.segm_trained_by_masks
+        return self.produce_densepose_losses(proposals_with_gt, densepose_predictor_outputs, gt_bitmasks)
 
 
         # if not self.segm_trained_by_masks:
@@ -219,12 +220,13 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
              * `loss_densepose_S`: has value 0, added only if `segm_trained_by_masks` is False
         """
         losses = {"loss_densepose_I": densepose_predictor_outputs.fine_segm.sum() * 0}
-        if not self.segm_trained_by_masks:
-            losses["loss_densepose_S"] = densepose_predictor_outputs.coarse_segm.sum() * 0
+        # if not self.segm_trained_by_masks:
+        losses["loss_densepose_S"] = densepose_predictor_outputs.coarse_segm.sum() * 0
         return losses
 
     def produce_densepose_losses(
-        self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any
+        self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any,
+        gt_bitmasks: Any,
     ) -> LossDict:
         """
         Losses for segmentation and U/V coordinates computed as cross-entropy
@@ -280,14 +282,15 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
             proposals_with_gt, densepose_predictor_outputs, tensors_helper, interpolator, j_valid_fg
         )
 
-        if not self.segm_trained_by_masks:
-            losses_segm = self.produce_densepose_losses_segm(
-                proposals_with_gt, densepose_predictor_outputs, tensors_helper, interpolator, j_valid_fg
-            )
+        # if not self.segm_trained_by_masks:
+        losses_segm = self.produce_densepose_losses_segm(
+            proposals_with_gt, densepose_predictor_outputs, tensors_helper, interpolator, j_valid_fg,
+            gt_bitmasks,
+        )
 
-            return {**losses_uv, **losses_segm}
-        else:
-            return {**losses_uv}
+        return {**losses_uv, **losses_segm}
+        # else:
+        #     return {**losses_uv}
 
     def produce_densepose_losses_uv(
         self,
@@ -313,7 +316,6 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
              * `loss_densepose_V`: smooth L1 loss for V coordinate estimates
         """
         u_gt = tensors_helper.u_gt[j_valid_fg]
-        # pdb.set_trace()
         u_est = interpolator.extract_at_points_globalIUV_diffHW(
             densepose_predictor_outputs.u
         )[j_valid_fg]
@@ -344,6 +346,7 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
         tensors_helper: SingleTensorsHelper,
         interpolator: BilinearInterpolationHelper,
         j_valid_fg: torch.Tensor,
+        gt_bitmasks: Any,
     ) -> LossDict:
         """
         Losses for fine / coarse segmentation: cross-entropy
@@ -371,27 +374,19 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
 
         fine_segm_gt = tensors_helper.fine_segm_labels_gt[interpolator.j_valid]
         fine_segm_est = interpolator.extract_at_points_globalIUV_diffHW(
-            densepose_predictor_outputs.fine_segm[tensors_helper.index_with_dp],
-            slice_index_uv=slice(None),
+            densepose_predictor_outputs.fine_segm,
+            slice_fine_segm=slice(None),
             mode='nearest',
         ).permute([1,0])[interpolator.j_valid, :]
 
-        # fine_segm_gt = tensors_helper.fine_segm_labels_gt[interpolator.j_valid]
-        # fine_segm_est = interpolator.extract_at_points(
-        #     densepose_predictor_outputs.fine_segm[tensors_helper.index_with_dp],
-        #     slice_fine_segm=slice(None),
-        #     w_ylo_xlo=interpolator.w_ylo_xlo[:, None],
-        #     w_ylo_xhi=interpolator.w_ylo_xhi[:, None],
-        #     w_yhi_xlo=interpolator.w_yhi_xlo[:, None],
-        #     w_yhi_xhi=interpolator.w_yhi_xhi[:, None],
-        # )[interpolator.j_valid, :]
         losses = {
             "loss_densepose_I": F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
         }
 
         # Resample everything to the estimated data size, no need to resample
         # S_est then:
-        if not self.segm_trained_by_masks and self.w_segm>0:
+        if not self.segm_trained_by_masks:
+            assert self.n_segm_chan==2
             coarse_segm_gt = tensors_helper.coarse_segm_gt
             coarse_segm_est = densepose_predictor_outputs.coarse_segm[tensors_helper.index_with_dp]
             coarse_segm_est = interpolator.extract_at_points_separatedS(
@@ -418,6 +413,10 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
             losses["loss_densepose_S"] = (
                 F.cross_entropy(coarse_segm_est, coarse_segm_gt.long()) * self.w_segm
             )
+        else:
+            assert self.n_segm_chan==1
+            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm.sigmoid(), gt_bitmasks)
+            losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
         return losses
 
 

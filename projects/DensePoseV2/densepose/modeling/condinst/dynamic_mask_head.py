@@ -31,15 +31,9 @@ def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPre
 
         S = densepose_outputs.coarse_segm[idx:idx+1]  #,:,y1:y2,x1:x2]
         logitH, logitW = S.shape[-2:]
+        _, y1, _, y2 = (bbox_xyxy[0]*logitH/imgH).floor().int()
+        x1, _, x2, _ = (bbox_xyxy[0]*logitW/imgW).floor().int()
         # pdb.set_trace()
-        x1, y1, x2, y2 = (bbox_xyxy[0]*logitH/imgH).round().int()
-        # print(x1, y1, x2, y2)
-        # pdb.set_trace()
-        # try:
-        #     t = densepose_outputs.coarse_segm[idx:idx+1,:,y1:y2,x1:x2]
-        #     S_list.append(F.interpolate(t,size=size,mode='bilinear'))
-        # except:
-        #     pdb.set_trace()
         S_list.append(densepose_outputs.coarse_segm[idx:idx+1,:,y1:y2,x1:x2])
         I_list.append(densepose_outputs.fine_segm[im_idx:im_idx+1,:,y1:y2,x1:x2])
         U_list.append(densepose_outputs.u[im_idx:im_idx+1,:,y1:y2,x1:x2])
@@ -57,6 +51,57 @@ def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPre
                                                      )
     pred_instances.set('pred_densepose', densepose_outputs)
     return pred_instances
+
+
+# def convert_condInst_to_densepose_inference_global(densepose_outputs: DensePoseChartPredictorOutput, 
+#     pred_instances: Instances, size) -> List[Instances]:
+#     S_list, I_list, U_list, V_list = [], [], [], []
+#     S = torch.zeros_like(densepose_outputs.coarse_segm)
+#     I = torch.zeros_like(densepose_outputs.coarse_segm)
+#     S = torch.zeros_like(densepose_outputs.coarse_segm)
+#     S = torch.zeros_like(densepose_outputs.coarse_segm)
+#     for idx in range(len(pred_instances)):
+#         ins = pred_instances[idx] 
+#         imgH, imgW = ins.image_size
+#         im_idx = ins.im_inds
+#         assert im_idx==0, "batch inference is not supported yet"
+#         bbox_xyxy = ins.pred_boxes.tensor
+#         socre = ins.scores
+
+#         S = densepose_outputs.coarse_segm[idx:idx+1]  #,:,y1:y2,x1:x2]
+#         logitH, logitW = S.shape[-2:]
+#         # pdb.set_trace()
+#         x1, y1, x2, y2 = (bbox_xyxy[0]*logitH/imgH).floor().int()
+#         # print(x1, y1, x2, y2)
+#         # pdb.set_trace()
+#         # try:
+#         #     t = densepose_outputs.coarse_segm[idx:idx+1,:,y1:y2,x1:x2]
+#         #     S_list.append(F.interpolate(t,size=size,mode='bilinear'))
+#         # except:
+#         #     pdb.set_trace()
+#         S_list.append(densepose_outputs.coarse_segm[idx:idx+1,:,y1:y2,x1:x2])
+#         I_list.append(densepose_outputs.fine_segm[im_idx:im_idx+1,:,y1:y2,x1:x2])
+#         U_list.append(densepose_outputs.u[im_idx:im_idx+1,:,y1:y2,x1:x2])
+#         V_list.append(densepose_outputs.v[im_idx:im_idx+1,:,y1:y2,x1:x2])
+#     # S_list = [F.interpolate(t,size=size,mode='bilinear') for t in S_list]
+#     # I_list = [F.interpolate(t,size=size,mode='bilinear') for t in I_list]
+#     # U_list = [F.interpolate(t,size=size,mode='bilinear') for t in U_list]
+#     # V_list = [F.interpolate(t,size=size,mode='bilinear') for t in V_list]
+
+#     densepose_outputs = DensePoseChartPredictorOutput(
+#                                                         coarse_segm=torch.cat(S_list,dim=0),
+#                                                         fine_segm=torch.cat(I_list,dim=0),
+#                                                         u=torch.cat(U_list,dim=0),
+#                                                         v=torch.cat(V_list,dim=0),
+#                                                      )
+#     pred_instances.set('pred_densepose', densepose_outputs)
+
+
+#         boxes = densepose_instances.pred_boxes.tensor
+#         boxes = boxes/densepose_instances.image_size[0]*imgsize[0]
+#         densepose_instances.set('pred_boxes', Boxes(boxes))
+
+#     return pred_instances
 
 
 def parse_dynamic_params(params, channels, weight_nums, bias_nums, n_segm_chan):
@@ -282,6 +327,8 @@ class DynamicMaskHead(nn.Module):
                 # pdb.set_trace()
                 if self.n_segm_chan==1:
                     s_logits = s_logits.sigmoid()
+                elif self.n_segm_chan==3:
+                    s_logits = s_logits[:,:1].sigmoid()
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=s_logits,
                                                                     fine_segm=iuv_logits[:,:25],
@@ -316,6 +363,13 @@ class DynamicMaskHead(nn.Module):
                 if self.n_segm_chan==1:
                     "To mimic 2 channels segmentation during inference"
                     s_logits = s_logits.sigmoid()
+                    # import imageio
+                    # pdb.set_trace()
+                    # ss = torch.cat(torch.split(s_logits, 1, dim=0), dim=-1)
+                    # imageio.imwrite("tmp/s_logits_sigmoid_1chSeg.png", ss[0,0].detach().cpu().numpy())
+                    s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+                elif self.n_segm_chan==3:
+                    s_logits = s_logits[:,:1].sigmoid()
                     s_logits = torch.cat([1-s_logits,s_logits],dim=1)
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=s_logits,
@@ -327,9 +381,12 @@ class DynamicMaskHead(nn.Module):
                 densepose_outputs = None
             # pdb.set_trace()
             # densepose_inference(densepose_outputs, pred_instances)
+            # pred_instances.set('pred_densepose', densepose_outputs)
             pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
-                                pred_instances, size=(self.heatmap_size,self.heatmap_size))
-            return pred_instances
+                                pred_instances, size=(256,256))
+            # pred_instances = convert_condInst_to_densepose_inference_global(densepose_outputs, 
+            #                     pred_instances, size=(self.heatmap_size,self.heatmap_size))
+            return pred_instances, densepose_outputs
 
 
 

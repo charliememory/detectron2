@@ -5,7 +5,7 @@ import bisect
 import multiprocessing as mp
 from collections import deque
 import cv2
-import torch
+import torch, pdb
 import matplotlib.pyplot as plt
 
 from detectron2.data import MetadataCatalog

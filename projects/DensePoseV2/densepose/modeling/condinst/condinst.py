@@ -17,6 +17,7 @@ from detectron2.structures.masks import PolygonMasks, polygons_to_bitmask
 from .dynamic_mask_head import build_dynamic_mask_head
 from .mask_branch import build_mask_branch
 from .iuv_head import build_iuv_head
+from .iuv_deeplab_head import build_iuv_deeplab_head
 
 # from adet.utils.comm import aligned_bilinear
 from densepose.utils.comm import aligned_bilinear
@@ -50,7 +51,10 @@ class CondInst(nn.Module):
         self.mask_head = build_dynamic_mask_head(cfg)
         self.mask_branch = build_mask_branch(cfg, self.backbone.output_shape())
         ##
-        self.iuv_head = build_iuv_head(cfg)
+        if cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseDeepLabHead":
+            self.iuv_head = build_iuv_deeplab_head(cfg)
+        else:
+            self.iuv_head = build_iuv_head(cfg)
         self.iuv_fea_dim = cfg.MODEL.CONDINST.IUVHead.CHANNELS
         self.s_ins_fea_dim = cfg.MODEL.CONDINST.MASK_HEAD.CHANNELS
         assert self.iuv_fea_dim+self.s_ins_fea_dim == cfg.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS
@@ -125,6 +129,7 @@ class CondInst(nn.Module):
         mask_feats, sem_losses = self.mask_branch(features, gt_instances)
         iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
         iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
+        # pdb.set_trace()
 
         # if torch.isnan(iuv_logits.mean()):
         #     pdb.set_trace()
@@ -156,8 +161,35 @@ class CondInst(nn.Module):
             # "TODO add densepose inference"
             assert len(batched_inputs)==1
             imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-            densepose_instances = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_logits, imgsize=imgsize)
+            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_logits, imgsize=imgsize)
+            
+            # import imageio
+            # im = batched_inputs[0]["image"]/255.
+            # im = F.interpolate(im.unsqueeze(0), size=imgsize)
+            # dp = densepose_instances[0]['instances']
+            # boxes = dp.pred_boxes.tensor.detach().cpu()
+            # segms = dp.pred_densepose.coarse_segm.detach().cpu()
+            # segms_comb = torch.zeros_like(im)
+            # for idx in range(boxes.shape[0]):
+            #     x1,y1,x2,y2 = boxes[idx].floor().int()
+            #     segms_comb[:,:,y1:y2,x1:x2] += F.interpolate(segms[idx:idx+1,1:2], (y2-y1,x2-x1))
+            # im = ((segms_comb+im)/2)[0].permute([1,2,0]).numpy()
+            # imageio.imwrite('tmp/im_ins_bbox.png', im)
             # pdb.set_trace()
+
+            # import imageio
+            # im = batched_inputs[0]["image"]/255.
+            # H, W = im.shape[-2:]
+            # S = densepose_outputs.coarse_segm.detach().cpu()
+            # ins_mask = F.interpolate(torch.sum(S,dim=0,keepdim=True), size=(H,W))[0,1:2]
+            # # S = F.interpolate(S, size=(H,W))
+            # # S = (S[:,0:1]<S[:,1:2]).float()
+            # # ins_mask = torch.sum(S,dim=0,keepdim=True)[0]\
+            # im = ((im+ins_mask)/2).permute([1,2,0]).numpy()
+            # imageio.imwrite('tmp/im_ins.png', im)
+            # pdb.set_trace()
+
+
             return densepose_instances
 
 
@@ -206,7 +238,7 @@ class CondInst(nn.Module):
         pred_instances = Instances.cat(proposals)
         pred_instances.mask_head_params = pred_instances.top_feat
 
-        densepose_instances = self.mask_head(
+        densepose_instances, densepose_outputs = self.mask_head(
             mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
         )
 
@@ -222,7 +254,38 @@ class CondInst(nn.Module):
         # pdb.set_trace()
         densepose_instances.set('pred_boxes', Boxes(boxes))
 
+        return [{'instances': densepose_instances}], densepose_outputs
+
+    def _forward_mask_heads_test_global(self, proposals, mask_feats, iuv_logits, imgsize):
+        # prepare the inputs for mask heads
+        for im_id, per_im in enumerate(proposals):
+            per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
+        pred_instances = Instances.cat(proposals)
+        pred_instances.mask_head_params = pred_instances.top_feat
+
+        densepose_instances = self.mask_head(
+            mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
+        )
+
         return [{'instances': densepose_instances}]
+
+            # padded_im_h, padded_im_w = images.tensor.size()[-2:]
+            # processed_results = []
+            # for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
+            #     height = input_per_image.get("height", image_size[0])
+            #     width = input_per_image.get("width", image_size[1])
+
+            #     instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
+            #     instances_per_im = self.postprocess(
+            #         instances_per_im, height, width,
+            #         padded_im_h, padded_im_w
+            #     )
+
+            #     processed_results.append({
+            #         "instances": instances_per_im
+            #     })
+
+            # return processed_results
 
     def add_bitmasks(self, instances, im_h, im_w):
         for per_im_gt_inst in instances:

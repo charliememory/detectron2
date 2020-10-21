@@ -94,6 +94,21 @@ class DensePoseResultExtractor(object):
         else:
             return None
 
+## MLQ added
+# "TODO"
+# class DensePoseGlobalIUVSeperatedSResultExtractor(object): 
+#     """
+#     Extracts DensePose result from instances
+#     """
+
+#     def __call__(self, instances: Instances):
+#         if instances.has("pred_densepose") and instances.has("pred_boxes"):
+#             boxes_xyxy = instances.pred_boxes
+#             boxes_xywh = extract_boxes_xywh_from_instances(instances)
+#             return results, boxes_xywh
+#         else:
+#             return None
+
 
 class CompoundExtractor(object):
     """
