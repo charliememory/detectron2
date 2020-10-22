@@ -57,7 +57,8 @@ class CondInst(nn.Module):
             self.iuv_head = build_iuv_head(cfg)
         self.iuv_fea_dim = cfg.MODEL.CONDINST.IUVHead.CHANNELS
         self.s_ins_fea_dim = cfg.MODEL.CONDINST.MASK_HEAD.CHANNELS
-        assert self.iuv_fea_dim+self.s_ins_fea_dim == cfg.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS
+        # assert self.iuv_fea_dim+self.s_ins_fea_dim == cfg.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS
+        assert cfg.MODEL.CONDINST.IUVHead.CHANNELS==cfg.MODEL.CONDINST.MASK_BRANCH.CHANNELS
         ##
         self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
         self.max_proposals = cfg.MODEL.CONDINST.MAX_PROPOSALS
@@ -126,8 +127,9 @@ class CondInst(nn.Module):
         else:
             gt_instances = None
 
-        mask_feats, sem_losses = self.mask_branch(features, gt_instances)
-        iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
+        agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+        # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
+        iuv_feats, s_ins_feats = agg_feats, mask_feats
         iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
         # pdb.set_trace()
 

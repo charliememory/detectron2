@@ -5,9 +5,9 @@ MODEL:
     DEPTH: 101
   CONDINST:
     MASK_BRANCH:
-      OUT_CHANNELS: 104 # 104 = 96+8
+      OUT_CHANNELS: 8 # 104 = 96+8
     IUVHead:
-      CHANNELS: 96
+      CHANNELS: 128
     MASK_HEAD:
       CHANNELS: 8
 

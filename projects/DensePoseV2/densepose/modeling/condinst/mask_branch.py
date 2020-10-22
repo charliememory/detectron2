@@ -85,7 +85,7 @@ class MaskBranch(nn.Module):
                 assert factor_h == factor_w
                 x_p = aligned_bilinear(x_p, factor_h)
                 x = x + x_p
-
+        agg_feats = x
         mask_feats = self.tower(x)
 
         if self.num_outputs == 0:
@@ -138,4 +138,4 @@ class MaskBranch(nn.Module):
             ) / num_pos
             losses['loss_sem'] = loss_sem
 
-        return mask_feats, losses
+        return agg_feats, mask_feats, losses

@@ -348,7 +348,11 @@ class BilinearInterpolationHelper:
             x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
             sample_size = 256
             bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
-            bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            # pdb.set_trace()
+            bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
+            bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH
+            bbox_xywh_in[0][2] = bbox_xywh_in[0][2]/imgW*logitW
+            bbox_xywh_in[0][3] = bbox_xywh_in[0][3]/imgH*logitH
             bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
             z_est_ins = _resample_data_v2(z_est[img_idx:img_idx+1], 
                                        bbox_xywh_out=bbox_xywh_out, 
@@ -416,7 +420,11 @@ class BilinearInterpolationHelper:
             x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
             sample_size = 256
             bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
-            bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            # bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
+            bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH
+            bbox_xywh_in[0][2] = bbox_xywh_in[0][2]/imgW*logitW
+            bbox_xywh_in[0][3] = bbox_xywh_in[0][3]/imgH*logitH
             bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
 
             z_est_ins = _resample_data_v2(z_est[idx:idx+1], 
