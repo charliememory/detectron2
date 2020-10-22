@@ -130,7 +130,7 @@ class CondInst(nn.Module):
         agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
         # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
         iuv_feats, s_ins_feats = agg_feats, mask_feats
-        iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
+        # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
         # pdb.set_trace()
 
         # if torch.isnan(iuv_logits.mean()):
@@ -141,7 +141,7 @@ class CondInst(nn.Module):
         )
 
         if self.training:
-            densepose_loss_dict = self._forward_mask_heads_train(proposals, s_ins_feats, iuv_logits, gt_instances=gt_instances)
+            densepose_loss_dict = self._forward_mask_heads_train(proposals, s_ins_feats, iuv_feats, gt_instances=gt_instances)
 
             # # instances = 
             # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
@@ -163,7 +163,7 @@ class CondInst(nn.Module):
             # "TODO add densepose inference"
             assert len(batched_inputs)==1
             imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_logits, imgsize=imgsize)
+            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_feats, imgsize=imgsize)
             
             # import imageio
             # im = batched_inputs[0]["image"]/255.
@@ -213,9 +213,10 @@ class CondInst(nn.Module):
 
             # return processed_results
 
-    def _forward_mask_heads_train(self, proposals, mask_feats, iuv_logits, gt_instances: List[Instances]):
+    def _forward_mask_heads_train(self, proposals, mask_feats, iuv_feats, gt_instances: List[Instances]):
         # prepare the inputs for mask heads
         pred_instances = proposals["instances"]
+        # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride, pred_instances)
 
         if 0 <= self.max_proposals < len(pred_instances):
             inds = torch.randperm(len(pred_instances), device=mask_feats.device).long()
@@ -226,22 +227,30 @@ class CondInst(nn.Module):
 
         pred_instances.mask_head_params = pred_instances.top_feats
 
-        loss_mask = self.mask_head(
-            mask_feats, iuv_logits, self.mask_branch.out_stride,
+        # loss_mask = self.mask_head(
+        #     mask_feats, iuv_logits, self.mask_branch.out_stride,
+        #     pred_instances, gt_instances
+        # )
+        loss_mask = self.mask_head(self.iuv_head, iuv_feats,
+            mask_feats, self.mask_branch.out_stride,
             pred_instances, gt_instances
         )
 
         return loss_mask
 
-    def _forward_mask_heads_test(self, proposals, mask_feats, iuv_logits, imgsize):
+    def _forward_mask_heads_test(self, proposals, mask_feats, iuv_feats, imgsize):
         # prepare the inputs for mask heads
         for im_id, per_im in enumerate(proposals):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
         pred_instances = Instances.cat(proposals)
         pred_instances.mask_head_params = pred_instances.top_feat
+        # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride, pred_instances)
+        # densepose_instances, densepose_outputs = self.mask_head(
+        #     mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
+        # )
 
-        densepose_instances, densepose_outputs = self.mask_head(
-            mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
+        densepose_instances, densepose_outputs = self.mask_head(self.iuv_head, iuv_feats,
+            mask_feats, self.mask_branch.out_stride, pred_instances
         )
 
         # im_inds = densepose_instances.get('im_inds')

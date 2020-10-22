@@ -335,6 +335,7 @@ class BilinearInterpolationHelper:
         w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
         w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
 
+        # pdb.set_trace()
         assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
         x0_gt, y0_gt, w_gt, h_gt = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox].unbind(1)
         index_bbox = self.tensors_helper.index_bbox
@@ -347,12 +348,15 @@ class BilinearInterpolationHelper:
             imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
             x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
             sample_size = 256
-            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
-            # pdb.set_trace()
+            # bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[idx:idx+1].clone()
+            # if (bbox_xywh_in-bb).mean()!=0:
+            #     pdb.set_trace()
             bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
             bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH
             bbox_xywh_in[0][2] = bbox_xywh_in[0][2]/imgW*logitW
             bbox_xywh_in[0][3] = bbox_xywh_in[0][3]/imgH*logitH
+            # pdb.set_trace()
             bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
             z_est_ins = _resample_data_v2(z_est[img_idx:img_idx+1], 
                                        bbox_xywh_out=bbox_xywh_out, 
@@ -419,7 +423,8 @@ class BilinearInterpolationHelper:
             imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
             x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
             sample_size = 256
-            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            # bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[idx:idx+1].clone()
             # bbox_xywh_in = bbox_xywh_in/imgW*logitW
             bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
             bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH

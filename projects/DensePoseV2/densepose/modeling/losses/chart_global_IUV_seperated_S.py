@@ -334,14 +334,14 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
         # v_est = interpolator.extract_at_points(
         #     densepose_predictor_outputs.v[tensors_helper.index_with_dp]
         # )[j_valid_fg]
-        # return {
-        #     "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
-        #     "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
-        # }
         return {
-            "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="mean") * self.w_points,
-            "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="mean") * self.w_points,
+            "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
+            "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
         }
+        # return {
+        #     "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="mean") * self.w_points,
+        #     "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="mean") * self.w_points,
+        # }
 
     def produce_densepose_losses_segm(
         self,
@@ -419,8 +419,13 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
             )
         else:
             assert self.n_segm_chan==1
-            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm.sigmoid(), gt_bitmasks)
+            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm, gt_bitmasks)
             losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
+            # pdb.set_trace() 
+            # import imageio
+            # est = densepose_predictor_outputs.coarse_segm
+            # imageio.imwrite("tmp/est.png", est[0,0].detach().cpu().numpy())
+            # imageio.imwrite("tmp/gt_bitmasks.png", gt_bitmasks[0,0].detach().cpu().numpy())
         return losses
 
 

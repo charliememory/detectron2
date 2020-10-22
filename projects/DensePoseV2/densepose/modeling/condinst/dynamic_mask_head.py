@@ -257,37 +257,19 @@ class DynamicMaskHead(nn.Module):
         # mask_logits = mask_logits.reshape(-1, 1, H, W)
         mask_logits = mask_logits.reshape(-1, self.n_segm_chan, H, W)
 
-        assert mask_feat_stride >= self.mask_out_stride
-        assert mask_feat_stride % self.mask_out_stride == 0
-        mask_logits = aligned_bilinear(mask_logits, int(mask_feat_stride / self.mask_out_stride))
+        # assert mask_feat_stride >= self.mask_out_stride
+        # assert mask_feat_stride % self.mask_out_stride == 0
+        # mask_logits = aligned_bilinear(mask_logits, int(mask_feat_stride / self.mask_out_stride))
 
-        # return mask_logits.sigmoid()
-        # return mask_logits[:,:-1,:,:], mask_logits[:,-1:,:,:].sigmoid()
-        # if self.n_segm_chan==1:
-        #     mask_logits = mask_logits.sigmoid()
-        #     return mask_logits
-        # elif self.n_segm_chan==2:
-        #     return mask_logits
-        # else:
-        #     raise NotImplementedError
         return mask_logits
         # m = mask_logits[:,-1:,:,:]
         # return mask_logits[:,:-1,:,:], m.sigmoid()
 
-    def __call__(self, mask_feats, iuv_logits, mask_feat_stride, pred_instances, gt_instances=None):
+    def __call__(self, iuv_head_func, iuv_feats, mask_feats, mask_feat_stride, pred_instances, gt_instances=None):
         if self.training:
             gt_inds = pred_instances.gt_inds
             gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
             gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
-
-            # gt_densepose_segm_list = []
-            # for per_im in gt_instances:
-            #     for t in per_im.gt_densepose:
-            #         if t is None:
-            #             pdb.set_trace()
-            #         gt_densepose_segm_list.append(t.segm)
-            # gt_densepose_segms = torch.stack(gt_densepose_segm_list, dim=0)
-            # gt_densepose_segms = gt_densepose_segms[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
 
             losses = {}
             if len(pred_instances) == 0:
@@ -301,59 +283,35 @@ class DynamicMaskHead(nn.Module):
                 s_logits = self.mask_heads_forward_with_coords(
                     mask_feats, mask_feat_stride, pred_instances
                 )
-                # print(mask_scores.shape, gt_bitmasks.shape)
-                # pdb.set_trace()
-                # mask_losses = dice_coefficient(s_logits.sigmoid(), gt_bitmasks)
-                # loss_mask = mask_losses.mean()
-                # pdb.set_trace()
-
-        # if not self.segm_trained_by_masks:
-        #     if self.n_segm_chan == 2:
-        #         s_gt = s_gt > 0
-        #     s_loss = F.cross_entropy(s_est, s_gt.long()) * self.w_segm
-        #     losses["loss_densepose_S"] = s_loss
-
-                ## DensePose
-                # densepose_outputs, _, confidences, _ = self.densepose_predictor(
-                #     densepose_head_outputs
-                # )
-                # iuv_logits
-                # densepose_outputs = [s_logits, iuv_logits[:,:25], iuv_logits[:,25:50], iuv_logits[:,50:75]]
-                # # print('s_logits.shape:', s_logits.shape, 'iuv_logits.shape:', iuv_logits.shape)
-                # # pdb.set_trace()
-                # confidences = (None,None,None,None,None,None)
-
-
-                # pdb.set_trace()
                 if self.n_segm_chan==1:
                     s_logits = s_logits.sigmoid()
                 elif self.n_segm_chan==3:
                     s_logits = s_logits[:,:1].sigmoid()
+                else:
+                    raise NotImplementedError
+
+                iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
+                
+                assert mask_feat_stride >= self.mask_out_stride
+                assert mask_feat_stride % self.mask_out_stride == 0
+                s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
+
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=s_logits,
                                                                     fine_segm=iuv_logits[:,:25],
                                                                     u=iuv_logits[:,25:50],
                                                                     v=iuv_logits[:,50:75],
                                                                  )
-                # proposal_boxes: Boxes
-                # gt_boxes
-                # gt_densepose
-                # proposals_with_gt = []
                 for i in range(len(gt_instances)):
                     gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
 
-                # densepose_loss_dict = self.densepose_losses(
-                #     gt_instances, densepose_outputs, confidences, bbox_free=True
-                # )
                 densepose_loss_dict = self.densepose_losses(
                     gt_instances, densepose_outputs, gt_bitmasks
                 )
                 losses.update(densepose_loss_dict)
-                # losses["loss_mask"] = loss_mask.float()
 
             return losses
 
-            # return loss_mask.float()
         else:
             if len(pred_instances) > 0:
                 s_logits = self.mask_heads_forward_with_coords(
@@ -363,14 +321,19 @@ class DynamicMaskHead(nn.Module):
                 if self.n_segm_chan==1:
                     "To mimic 2 channels segmentation during inference"
                     s_logits = s_logits.sigmoid()
-                    # import imageio
-                    # pdb.set_trace()
-                    # ss = torch.cat(torch.split(s_logits, 1, dim=0), dim=-1)
-                    # imageio.imwrite("tmp/s_logits_sigmoid_1chSeg.png", ss[0,0].detach().cpu().numpy())
                     s_logits = torch.cat([1-s_logits,s_logits],dim=1)
                 elif self.n_segm_chan==3:
                     s_logits = s_logits[:,:1].sigmoid()
                     s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+                else:
+                    raise NotImplementedError
+
+                iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
+
+                assert mask_feat_stride >= self.mask_out_stride
+                assert mask_feat_stride % self.mask_out_stride == 0
+                s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
+
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=s_logits,
                                                                     fine_segm=iuv_logits[:,:25],
@@ -379,14 +342,130 @@ class DynamicMaskHead(nn.Module):
                                                                  )
             else:
                 densepose_outputs = None
-            # pdb.set_trace()
-            # densepose_inference(densepose_outputs, pred_instances)
-            # pred_instances.set('pred_densepose', densepose_outputs)
             pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
                                 pred_instances, size=(256,256))
-            # pred_instances = convert_condInst_to_densepose_inference_global(densepose_outputs, 
-            #                     pred_instances, size=(self.heatmap_size,self.heatmap_size))
             return pred_instances, densepose_outputs
+
+
+
+
+    # def __call__(self, mask_feats, iuv_logits, mask_feat_stride, pred_instances, gt_instances=None):
+    #     if self.training:
+    #         gt_inds = pred_instances.gt_inds
+    #         gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
+    #         gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+
+    #         # gt_densepose_segm_list = []
+    #         # for per_im in gt_instances:
+    #         #     for t in per_im.gt_densepose:
+    #         #         if t is None:
+    #         #             pdb.set_trace()
+    #         #         gt_densepose_segm_list.append(t.segm)
+    #         # gt_densepose_segms = torch.stack(gt_densepose_segm_list, dim=0)
+    #         # gt_densepose_segms = gt_densepose_segms[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+
+    #         losses = {}
+    #         if len(pred_instances) == 0:
+    #             loss_mask = mask_feats.sum() * 0 + pred_instances.mask_head_params.sum() * 0
+    #             losses["loss_mask"] = loss_mask.float()
+    #             losses["loss_densepose_I"] = mask_feats.sum() * 0
+    #             losses["loss_densepose_U"] = mask_feats.sum() * 0
+    #             losses["loss_densepose_V"] = mask_feats.sum() * 0
+    #             losses["loss_densepose_S"] = mask_feats.sum() * 0
+    #         else:
+    #             s_logits = self.mask_heads_forward_with_coords(
+    #                 mask_feats, mask_feat_stride, pred_instances
+    #             )
+    #             # print(mask_scores.shape, gt_bitmasks.shape)
+    #             # pdb.set_trace()
+    #             # mask_losses = dice_coefficient(s_logits.sigmoid(), gt_bitmasks)
+    #             # loss_mask = mask_losses.mean()
+    #             # pdb.set_trace()
+
+    #     # if not self.segm_trained_by_masks:
+    #     #     if self.n_segm_chan == 2:
+    #     #         s_gt = s_gt > 0
+    #     #     s_loss = F.cross_entropy(s_est, s_gt.long()) * self.w_segm
+    #     #     losses["loss_densepose_S"] = s_loss
+
+    #             ## DensePose
+    #             # densepose_outputs, _, confidences, _ = self.densepose_predictor(
+    #             #     densepose_head_outputs
+    #             # )
+    #             # iuv_logits
+    #             # densepose_outputs = [s_logits, iuv_logits[:,:25], iuv_logits[:,25:50], iuv_logits[:,50:75]]
+    #             # # print('s_logits.shape:', s_logits.shape, 'iuv_logits.shape:', iuv_logits.shape)
+    #             # # pdb.set_trace()
+    #             # confidences = (None,None,None,None,None,None)
+
+
+    #             # pdb.set_trace()
+    #             if self.n_segm_chan==1:
+    #                 s_logits = s_logits.sigmoid()
+    #             elif self.n_segm_chan==3:
+    #                 s_logits = s_logits[:,:1].sigmoid()
+    #             else:
+    #                 raise NotImplementedError
+    #             densepose_outputs = DensePoseChartPredictorOutput(
+    #                                                                 coarse_segm=s_logits,
+    #                                                                 fine_segm=iuv_logits[:,:25],
+    #                                                                 u=iuv_logits[:,25:50],
+    #                                                                 v=iuv_logits[:,50:75],
+    #                                                              )
+    #             # proposal_boxes: Boxes
+    #             # gt_boxes
+    #             # gt_densepose
+    #             # proposals_with_gt = []
+    #             for i in range(len(gt_instances)):
+    #                 gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
+
+    #             # densepose_loss_dict = self.densepose_losses(
+    #             #     gt_instances, densepose_outputs, confidences, bbox_free=True
+    #             # )
+    #             densepose_loss_dict = self.densepose_losses(
+    #                 gt_instances, densepose_outputs, gt_bitmasks
+    #             )
+    #             losses.update(densepose_loss_dict)
+    #             # losses["loss_mask"] = loss_mask.float()
+
+    #         return losses
+
+    #         # return loss_mask.float()
+    #     else:
+    #         if len(pred_instances) > 0:
+    #             s_logits = self.mask_heads_forward_with_coords(
+    #                 mask_feats, mask_feat_stride, pred_instances
+    #             )
+
+    #             if self.n_segm_chan==1:
+    #                 "To mimic 2 channels segmentation during inference"
+    #                 s_logits = s_logits.sigmoid()
+    #                 # import imageio
+    #                 # pdb.set_trace()
+    #                 # ss = torch.cat(torch.split(s_logits, 1, dim=0), dim=-1)
+    #                 # imageio.imwrite("tmp/s_logits_sigmoid_1chSeg.png", ss[0,0].detach().cpu().numpy())
+    #                 s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+    #             elif self.n_segm_chan==3:
+    #                 s_logits = s_logits[:,:1].sigmoid()
+    #                 s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+    #             else:
+    #                 raise NotImplementedError
+    #             densepose_outputs = DensePoseChartPredictorOutput(
+    #                                                                 coarse_segm=s_logits,
+    #                                                                 fine_segm=iuv_logits[:,:25],
+    #                                                                 u=iuv_logits[:,25:50],
+    #                                                                 v=iuv_logits[:,50:75],
+    #                                                              )
+    #         else:
+    #             densepose_outputs = None
+    #         # pdb.set_trace()
+    #         # densepose_inference(densepose_outputs, pred_instances)
+    #         # pred_instances.set('pred_densepose', densepose_outputs)
+    #         pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
+    #                             pred_instances, size=(256,256))
+    #         # pred_instances = convert_condInst_to_densepose_inference_global(densepose_outputs, 
+    #         #                     pred_instances, size=(self.heatmap_size,self.heatmap_size))
+    #         return pred_instances, densepose_outputs
 
 
 
