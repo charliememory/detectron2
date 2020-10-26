@@ -10,14 +10,14 @@ import sys
 from typing import Any, ClassVar, Dict, List
 import torch
 
-from detectron2.config import get_cfg
+# from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.engine.defaults import DefaultPredictor
-from detectron2.structures.boxes import BoxMode
 from detectron2.structures.instances import Instances
 from detectron2.utils.logger import setup_logger
 
-from densepose import add_densepose_config, add_hrnet_config
+from densepose.config import get_cfg, add_densepose_config, add_hrnet_config
+# from densepose import add_densepose_config, add_hrnet_config
 from densepose.utils.logger import verbosity_to_level
 from densepose.vis.base import CompoundVisualizer
 from densepose.vis.bounding_box import ScoredBoundingBoxVisualizer
@@ -27,7 +27,7 @@ from densepose.vis.densepose_results import (
     DensePoseResultsUVisualizer,
     DensePoseResultsVVisualizer,
 )
-from densepose.vis.extractor import CompoundExtractor, create_extractor
+from densepose.vis.extractor import CompoundExtractor, DensePoseResultExtractor, create_extractor
 
 DOC = """Apply Net - a tool to print / visualize DensePose results
 """
@@ -66,6 +66,12 @@ class InferenceAction(Action):
         parser.add_argument("model", metavar="<model>", help="Model file")
         parser.add_argument("input", metavar="<input>", help="Input data")
         parser.add_argument("--smooth_k", type=int, default=0, metavar="<smooth_k>", help="smooth_k")
+        parser.add_argument(
+            "--confidence-threshold",
+            type=float,
+            default=0.5,
+            help="Minimum score for instance predictions to be shown",
+        )
         parser.add_argument(
             "--opts",
             help="Modify config options using the command-line 'KEY VALUE' pairs",
@@ -133,9 +139,11 @@ class InferenceAction(Action):
     def setup_config(
         cls: type, config_fpath: str, model_fpath: str, args: argparse.Namespace, opts: List[str]
     ):
+        # pdb.set_trace()
         cfg = get_cfg()
         add_densepose_config(cfg)
-        add_hrnet_config(cfg)
+        # add_hrnet_config(cfg)
+        # add_adet_cfg(cfg, args)
         cfg.merge_from_file(config_fpath)
         cfg.merge_from_list(args.opts)
         if opts:
@@ -145,6 +153,12 @@ class InferenceAction(Action):
         cfg.MODEL.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         cfg.DATA_DIR = os.path.dirname(args.input)
         cfg.SMOOTH_K = args.smooth_k
+        # Set score_threshold for builtin models
+        cfg.MODEL.RETINANET.SCORE_THRESH_TEST = args.confidence_threshold
+        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = args.confidence_threshold
+        cfg.MODEL.FCOS.INFERENCE_TH_TEST = args.confidence_threshold
+        cfg.MODEL.MEInst.INFERENCE_TH_TEST = args.confidence_threshold
+        cfg.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = args.confidence_threshold
         cfg.freeze()
         return cfg
 
@@ -208,9 +222,7 @@ class DumpAction(InferenceAction):
         if outputs.has("pred_boxes"):
             result["pred_boxes_XYXY"] = outputs.get("pred_boxes").tensor.cpu()
             if outputs.has("pred_densepose"):
-                # pdb.set_trace()
-                boxes_XYWH = BoxMode.convert(result["pred_boxes_XYXY"], BoxMode.XYXY_ABS, BoxMode.XYWH_ABS)
-                result["pred_densepose"] = outputs.get("pred_densepose").to_result(boxes_XYWH)
+                result["pred_densepose"], _ = DensePoseResultExtractor()(outputs)
         context["results"].append(result)
 
     @classmethod

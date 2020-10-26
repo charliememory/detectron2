@@ -6,7 +6,7 @@ import torch
 from detectron2.layers.nms import batched_nms
 from detectron2.structures.instances import Instances
 
-from densepose.converters import ToChartResultConverter
+from densepose.converters import ToChartResultConverterWithConfidences
 from densepose.vis.bounding_box import BoundingBoxVisualizer, ScoredBoundingBoxVisualizer
 from densepose.vis.densepose_results import DensePoseResultsVisualizer
 
@@ -88,11 +88,26 @@ class DensePoseResultExtractor(object):
             if select is not None:
                 dpout = dpout[select]
                 boxes_xyxy = boxes_xyxy[select]
-            converter = ToChartResultConverter()
+            converter = ToChartResultConverterWithConfidences()
             results = [converter.convert(dpout[i], boxes_xyxy[[i]]) for i in range(len(dpout))]
             return results, boxes_xywh
         else:
             return None
+
+## MLQ added
+# "TODO"
+# class DensePoseGlobalIUVSeperatedSResultExtractor(object): 
+#     """
+#     Extracts DensePose result from instances
+#     """
+
+#     def __call__(self, instances: Instances):
+#         if instances.has("pred_densepose") and instances.has("pred_boxes"):
+#             boxes_xyxy = instances.pred_boxes
+#             boxes_xywh = extract_boxes_xywh_from_instances(instances)
+#             return results, boxes_xywh
+#         else:
+#             return None
 
 
 class CompoundExtractor(object):

@@ -123,8 +123,6 @@ class CondInst(nn.Module):
 
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-            if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
-                pdb.set_trace()
             self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
         else:
             gt_instances = None
@@ -166,7 +164,7 @@ class CondInst(nn.Module):
             assert len(batched_inputs)==1
             imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
             densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_feats, imgsize=imgsize)
-            # pdb.set_trace()
+            
             # import imageio
             # im = batched_inputs[0]["image"]/255.
             # im = F.interpolate(im.unsqueeze(0), size=imgsize)
@@ -267,20 +265,7 @@ class CondInst(nn.Module):
         # pdb.set_trace()
         densepose_instances.set('pred_boxes', Boxes(boxes))
 
-        # pdb.set_trace()
-        # from ...utils.comm import SIUV_logit_to_iuv_batch
-        # import imageio
-        # S = densepose_outputs.coarse_segm[:1]
-        # I = densepose_outputs.fine_segm[:1]
-        # U = densepose_outputs.u[:1]
-        # V = densepose_outputs.v[:1]
-        # siuv_logit = torch.cat([S,I,U,V], dim=1)
-        # iuv = SIUV_logit_to_iuv_batch(siuv_logit, norm=False, use_numpy=False)
-
-
         return [{'instances': densepose_instances}], densepose_outputs
-        # return [densepose_instances], densepose_outputs
-        # return {'instances': densepose_instances}, densepose_outputs
 
     def _forward_mask_heads_test_global(self, proposals, mask_feats, iuv_logits, imgsize):
         # prepare the inputs for mask heads

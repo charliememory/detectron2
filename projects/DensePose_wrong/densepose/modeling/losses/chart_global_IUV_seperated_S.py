@@ -334,7 +334,6 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
         # v_est = interpolator.extract_at_points(
         #     densepose_predictor_outputs.v[tensors_helper.index_with_dp]
         # )[j_valid_fg]
-        # pdb.set_trace()
         return {
             "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
             "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
@@ -381,31 +380,12 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
         fine_segm_est = interpolator.extract_at_points_globalIUV_diffHW(
             densepose_predictor_outputs.fine_segm,
             slice_fine_segm=slice(None),
-            mode='bilinear', #'nearest'
+            mode='nearest',
         ).permute([1,0])[interpolator.j_valid, :]
 
         losses = {
             "loss_densepose_I": F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
         }
-        # print(fine_segm_gt)
-        # print(torch.argmax(fine_segm_est,dim=-1))
-        # print(losses)
-        # import imageio
-        # pdb.set_trace()
-        # imageio.imwrite("tmp/fine_segm_gt.png", (fine_segm_gt/24.0)[0].detach().cpu().numpy())
-        # imageio.imwrite("tmp/fine_segm_est.png", (torch.argmax(fine_segm_est,dim=-1)/24.0)[0].detach().cpu().numpy())
-
-        # m = fine_segm_gt.long()>0
-        # loss = F.cross_entropy(fine_segm_est, fine_segm_gt.long(), reduction='none')
-        # pdb.set_trace()
-        # import imageio
-        # est = densepose_predictor_outputs.coarse_segm
-        # imageio.imwrite("tmp/est.png", (fine_segm_gt/24.0)[0,0].detach().cpu().numpy())
-
-        # loss = (loss*m).mean()
-        # losses = {
-        #     "loss_densepose_I": loss * self.w_part
-        # }
 
         # Resample everything to the estimated data size, no need to resample
         # S_est then:
@@ -416,7 +396,7 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
             coarse_segm_est = interpolator.extract_at_points_separatedS(
                 coarse_segm_est,
                 slice_index_uv=slice(None),
-                mode='bilinear', #'nearest'
+                mode='nearest',
             )
         # if not self.segm_trained_by_masks:
             # Resample everything to the estimated data size, no need to resample
@@ -438,27 +418,8 @@ class DensePoseChartGlobalIUVSeparatedSLoss(DensePoseChartLoss):
                 F.cross_entropy(coarse_segm_est, coarse_segm_gt.long()) * self.w_segm
             )
         else:
-            coarse_segm_est = densepose_predictor_outputs.coarse_segm
-
-            # masks_gt = []
-            # mask_size = 256
-            # for proposals_targets_per_image in proposals_with_gt:
-            #     n_i = proposals_targets_per_image.proposal_boxes.tensor.size(0)
-            #     if not n_i:
-            #         continue
-            #     gt_masks_per_image = proposals_targets_per_image.gt_masks.crop_and_resize(
-            #         proposals_targets_per_image.proposal_boxes.tensor, mask_size
-            #     ).to(device=fine_segm_est.device)
-            #     masks_gt.append(gt_masks_per_image)
-            #     # offset += n_i
-            # pdb.set_trace()
-            # if masks_gt:
-            #     data.masks_est = estimated_segm
-            #     data.masks_gt = torch.cat(masks_gt, dim=0)
-
-
             assert self.n_segm_chan==1
-            loss_mask = dice_coefficient(coarse_segm_est, gt_bitmasks)
+            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm, gt_bitmasks)
             losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
             # pdb.set_trace() 
             # import imageio

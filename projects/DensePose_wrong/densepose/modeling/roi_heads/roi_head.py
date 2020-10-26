@@ -175,7 +175,6 @@ class DensePoseROIHeads(StandardROIHeads):
             else:
                 densepose_predictor_outputs = None
 
-            # pdb.set_trace()
             densepose_inference(densepose_predictor_outputs, instances)
             return instances
 

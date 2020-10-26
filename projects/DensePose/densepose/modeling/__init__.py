@@ -10,15 +10,3 @@ from .build import (
     build_densepose_losses,
     build_densepose_predictor,
 )
-
-
-# ==> To avlid KeyError: "No object named 'CondInst' found in 'META_ARCH' registry!"
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-
-# Just to register models from adet 
-from .fcos import FCOS  
-from .backbone import build_fcos_resnet_fpn_backbone
-from .condinst import condinst
-
-_EXCLUDE = {"torch", "ShapeSpec"}
-__all__ = [k for k in globals().keys() if k not in _EXCLUDE and not k.startswith("_")]
