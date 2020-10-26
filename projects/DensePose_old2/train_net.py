@@ -12,16 +12,14 @@ It is an example of how a user might use detectron2 for a new project.
 from fvcore.common.file_io import PathManager
 
 import detectron2.utils.comm as comm
-# from detectron2.config import get_cfg
+from detectron2.config import get_cfg
 from detectron2.engine import default_argument_parser, default_setup, hooks, launch
 from detectron2.evaluation import verify_results
 from detectron2.utils.logger import setup_logger
 
-from densepose.config import get_cfg, add_densepose_config
-# from densepose import add_densepose_config
+from densepose import add_densepose_config
 from densepose.engine import Trainer
 from densepose.modeling.densepose_checkpoint import DensePoseCheckpointer
-import pdb
 
 
 def setup(args):
@@ -41,7 +39,6 @@ def main(args):
     # disable strict kwargs checking: allow one to specify path handle
     # hints through kwargs, like timeout in DP evaluation
     PathManager.set_strict_kwargs_checking(False)
-    # pdb.set_trace()
 
     if args.eval_only:
         model = Trainer.build_model(cfg)

@@ -19,10 +19,10 @@ class DensePoseDeepLabHead(nn.Module):
     <https://arxiv.org/abs/1706.05587>.
     """
 
-    def __init__(self, cfg: CfgNode, input_channels: int, hidden_dim=None):
+    def __init__(self, cfg: CfgNode, input_channels: int):
         super(DensePoseDeepLabHead, self).__init__()
         # fmt: off
-        hidden_dim           = cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM if hidden_dim is None else hidden_dim
+        hidden_dim           = cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM
         kernel_size          = cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_KERNEL
         norm                 = cfg.MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM
         self.n_stacked_convs = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_STACKED_CONVS
