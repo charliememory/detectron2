@@ -18,6 +18,11 @@ from densepose.utils.comm import compute_locations, aligned_bilinear
 #     build_densepose_predictor,
 #     densepose_inference,
 # )
+from lambda_networks import LambdaLayer
+
+
+# x = torch.randn(1, 32, 64, 64)
+# layer(x) # (1, 32, 64, 64)
 import pdb
 
 INF = 100000000
@@ -29,28 +34,58 @@ def build_iuv_head(cfg):
 
 
 class CoordGlobalIUVHeadAfterMaskBranch(nn.Module):
-    def __init__(self, cfg, disable_rel_coords=False):
+    def __init__(self, cfg, use_rel_coords=True):
         super().__init__()
         self.num_outputs = cfg.MODEL.CONDINST.IUVHead.OUT_CHANNELS
         norm = cfg.MODEL.CONDINST.IUVHead.NORM
         num_convs = cfg.MODEL.CONDINST.IUVHead.NUM_CONVS
+        num_lambda_layer = cfg.MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER
+        assert num_lambda_layer<=num_convs
         channels = cfg.MODEL.CONDINST.IUVHead.CHANNELS
         soi = cfg.MODEL.FCOS.SIZES_OF_INTEREST
         self.register_buffer("sizes_of_interest", torch.tensor(soi + [soi[-1] * 2]))
-        self.in_channels = channels + 2
         self.iuv_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
-        self.disable_rel_coords = disable_rel_coords
+        self.use_rel_coords = cfg.MODEL.ROI_DENSEPOSE_HEAD.REL_COORDS
+        # pdb.set_trace()
+        # if self.use_rel_coords:
+        #     self.in_channels = channels + 2
+        # else:
+        self.in_channels = channels + 2
 
         conv_block = conv_with_kaiming_uniform(norm, activation=True)
 
         tower = []
-        tower.append(conv_block(
-            self.in_channels, channels, 3, 1
-        ))
-        for i in range(1,num_convs):
+        if num_lambda_layer>0:
+            layer = LambdaLayer(
+                dim = self.in_channels,
+                dim_out = channels,
+                r = 23,         # the receptive field for relative positional encoding (23 x 23)
+                dim_k = 16,
+                heads = 4,
+                dim_u = 4
+            )
+            tower.append(layer)
+        else:
             tower.append(conv_block(
-                channels, channels, 3, 1
+                self.in_channels, channels, 3, 1
             ))
+
+        for i in range(1,num_convs):
+            if i<num_lambda_layer:
+                layer = LambdaLayer(
+                    dim = channels,
+                    dim_out = channels,
+                    r = 23,         # the receptive field for relative positional encoding (23 x 23)
+                    dim_k = 16,
+                    heads = 4,
+                    dim_u = 4
+                )
+                tower.append(layer)
+            else:
+                tower.append(conv_block(
+                    channels, channels, 3, 1
+                ))
+
         tower.append(nn.Conv2d(
             channels, max(self.num_outputs, 1), 1
         ))
@@ -60,18 +95,20 @@ class CoordGlobalIUVHeadAfterMaskBranch(nn.Module):
 
     def forward(self, s_logits, iuv_feats, iuv_feat_stride, instances):
 
-        locations = compute_locations(
-            iuv_feats.size(2), iuv_feats.size(3),
-            stride=iuv_feat_stride, device=iuv_feats.device
-        )
-        # n_inst = len(instances)
-
-        im_inds = instances.im_inds
 
         N, _, H, W = iuv_feats.size()
         rel_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
 
-        if not self.disable_rel_coords: 
+        if self.use_rel_coords: 
+            locations = compute_locations(
+                iuv_feats.size(2), iuv_feats.size(3),
+                stride=iuv_feat_stride, device=iuv_feats.device
+            )
+            # n_inst = len(instances)
+
+            im_inds = instances.im_inds
+
+
             instance_locations = instances.locations
             relative_coords = instance_locations.reshape(-1, 1, 2) - locations.reshape(1, -1, 2)
             relative_coords = relative_coords.permute(0, 2, 1).float()
@@ -97,9 +134,9 @@ class CoordGlobalIUVHeadAfterMaskBranch(nn.Module):
                     # imageio.imwrite("tmp/coord_mean.png",coord[0,0].detach().cpu().numpy())
                 # rel_coord_list.append(rel_coord)
             # pdb.set_trace()
-            iuv_head_inputs = torch.cat([rel_coord, iuv_feats], dim=1) 
-        else:
-            iuv_head_inputs = iuv_feats
+        iuv_head_inputs = torch.cat([rel_coord, iuv_feats], dim=1) 
+        # else:
+        #     iuv_head_inputs = iuv_feats
 
 
 

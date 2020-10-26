@@ -18,7 +18,7 @@ img_dir=$data_root/images
 vis_dir=$data_root/DP_vis
 mkdir $vis_dir
 python apply_net.py show configs/densepose_rcnn_R_101_FPN_DL_WC1_s1x.yaml \
-						densepose_rcnn_R_101_FPN_DL_WC1_s1x.pkl \
+						../../pretrain/densepose_rcnn_R_101_FPN_DL_WC1_s1x.pkl \
 						$img_dir dp_contour,bbox \
 						--output $vis_dir/frame_.jpg --smooth_k 0
 
@@ -27,7 +27,7 @@ img_dir=$data_root/images
 vis_dir=$data_root/DP_vis_smooth2
 mkdir $vis_dir
 python apply_net.py show configs/densepose_rcnn_R_101_FPN_DL_WC1_s1x.yaml \
-						densepose_rcnn_R_101_FPN_DL_WC1_s1x.pkl \
+						../../pretrain/densepose_rcnn_R_101_FPN_DL_WC1_s1x.pkl \
 						$img_dir dp_contour,bbox \
 						--output $vis_dir/frame_.jpg --smooth_k 2
 

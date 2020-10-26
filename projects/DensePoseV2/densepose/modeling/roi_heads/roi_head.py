@@ -176,6 +176,7 @@ class DensePoseROIHeads(StandardROIHeads):
                 densepose_predictor_outputs = None
 
             densepose_inference(densepose_predictor_outputs, instances)
+            # pdb.set_trace()
             return instances
 
     def _forward_densepose_smooth_save(self, features: Dict[str, torch.Tensor], instances: List[Instances]):

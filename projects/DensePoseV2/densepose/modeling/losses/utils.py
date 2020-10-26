@@ -445,6 +445,206 @@ class BilinearInterpolationHelper:
         return torch.cat(z_est_sampled_all,dim=0)
 
 
+    def extract_at_points_globalIUV_crop_resize_old(
+        self,
+        z_est,
+        slice_fine_segm=None,
+        w_ylo_xlo=None,
+        w_ylo_xhi=None,
+        w_yhi_xlo=None,
+        w_yhi_xhi=None,
+        mode='bilinear',
+    ):
+        """
+        Extract ground truth values z_gt for valid point indices and estimated
+        values z_est using bilinear interpolation over top-left (y_lo, x_lo),
+        top-right (y_lo, x_hi), bottom-left (y_hi, x_lo) and bottom-right
+        (y_hi, x_hi) values in z_est with corresponding weights:
+        w_ylo_xlo, w_ylo_xhi, w_yhi_xlo and w_yhi_xhi.
+        Use slice_index_uv to slice dim=1 in z_est
+        """
+        # index_gt_all = self.tensors_helper.index_gt_all
+        # slice_index_uv = index_gt_all if slice_index_uv is None else slice_index_uv
+        slice_fine_segm = (
+            self.tensors_helper.fine_segm_labels_gt if slice_fine_segm is None else slice_fine_segm
+        )
+        w_ylo_xlo = self.w_ylo_xlo if w_ylo_xlo is None else w_ylo_xlo
+        w_ylo_xhi = self.w_ylo_xhi if w_ylo_xhi is None else w_ylo_xhi
+        w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
+        w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
+
+        assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
+        z_est_resize = []
+        for img_idx in range(z_est.shape[0]):
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+            z = F.interpolate(z_est[img_idx:img_idx+1], size=(imgH, imgW)) 
+            z_est_resize.append(z)
+        # print([z.shape for z in z_est_resize])
+        sample_size = 256
+        z_est_ins_resize = []
+        for idx in range(self.tensors_helper.bbox_xywh_gt.shape[0]):
+            img_idx = self.tensors_helper.index_img[idx]
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+            x,y,w,h = self.tensors_helper.bbox_xywh_gt[idx].int() #.round().int()
+            x1 = max(x,0.)
+            y1 = max(y,0.)
+            x2 = min(x+w,imgW-1)
+            y2 = min(y+h,imgH-1)
+            try:
+                z = F.interpolate(z_est_resize[img_idx][:,:,y1:y2,x1:x2], size=(sample_size,sample_size))
+            except:
+                pdb.set_trace()
+            z_est_ins_resize.append(z)
+        z_est_ins_resize = torch.cat(z_est_ins_resize, dim=0)
+
+        index_bbox = self.tensors_helper.index_bbox
+        z_est_sampled = (
+            z_est_ins_resize[index_bbox, slice_fine_segm, self.y_lo, self.x_lo] * w_ylo_xlo
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_lo, self.x_hi] * w_ylo_xhi
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_hi, self.x_lo] * w_yhi_xlo
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_hi, self.x_hi] * w_yhi_xhi
+        )
+        # pdb.set_trace()
+        return z_est_sampled
+
+
+    """
+    Crop and resize from logit directly, instead of resize logit and then crop resize.
+    This can avoid NAN caused by gradient vanishing due to multiple bilinear resize.
+    """
+    def extract_at_points_globalIUV_crop_resize(
+        self,
+        z_est,
+        slice_fine_segm=None,
+        w_ylo_xlo=None,
+        w_ylo_xhi=None,
+        w_yhi_xlo=None,
+        w_yhi_xhi=None,
+        mode='bilinear',
+    ):
+        """
+        Extract ground truth values z_gt for valid point indices and estimated
+        values z_est using bilinear interpolation over top-left (y_lo, x_lo),
+        top-right (y_lo, x_hi), bottom-left (y_hi, x_lo) and bottom-right
+        (y_hi, x_hi) values in z_est with corresponding weights:
+        w_ylo_xlo, w_ylo_xhi, w_yhi_xlo and w_yhi_xhi.
+        Use slice_index_uv to slice dim=1 in z_est
+        """
+        # index_gt_all = self.tensors_helper.index_gt_all
+        # slice_index_uv = index_gt_all if slice_index_uv is None else slice_index_uv
+        slice_fine_segm = (
+            self.tensors_helper.fine_segm_labels_gt if slice_fine_segm is None else slice_fine_segm
+        )
+        w_ylo_xlo = self.w_ylo_xlo if w_ylo_xlo is None else w_ylo_xlo
+        w_ylo_xhi = self.w_ylo_xhi if w_ylo_xhi is None else w_ylo_xhi
+        w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
+        w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
+
+        assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
+        # z_est_resize = []
+        # for img_idx in range(z_est.shape[0]):
+        #     imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+        #     z = F.interpolate(z_est[img_idx:img_idx+1], size=(imgH, imgW)) 
+        #     z_est_resize.append(z)
+        # print([z.shape for z in z_est_resize])
+        sample_size = 256
+        z_est_ins_resize = []
+        for idx in range(self.tensors_helper.bbox_xywh_gt.shape[0]):
+            img_idx = self.tensors_helper.index_img[idx]
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+
+            logitH, logitW = z_est.shape[-2], z_est.shape[-1]
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[idx:idx+1].clone()
+            # bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
+            bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH
+            bbox_xywh_in[0][2] = bbox_xywh_in[0][2]/imgW*logitW
+            bbox_xywh_in[0][3] = bbox_xywh_in[0][3]/imgH*logitH
+            x,y,w,h = bbox_xywh_in[0].round().int()
+            x1 = max(x,0.)
+            y1 = max(y,0.)
+            x2 = min(x+w,logitW-1)
+            y2 = min(y+h,logitH-1)
+            try:
+                z = F.interpolate(z_est[img_idx:img_idx+1,:,y1:y2,x1:x2], size=(sample_size,sample_size))
+            except:
+                pdb.set_trace()
+            z_est_ins_resize.append(z)
+        z_est_ins_resize = torch.cat(z_est_ins_resize, dim=0)
+
+        index_bbox = self.tensors_helper.index_bbox
+        z_est_sampled = (
+            z_est_ins_resize[index_bbox, slice_fine_segm, self.y_lo, self.x_lo] * w_ylo_xlo
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_lo, self.x_hi] * w_ylo_xhi
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_hi, self.x_lo] * w_yhi_xlo
+            + z_est_ins_resize[index_bbox, slice_fine_segm, self.y_hi, self.x_hi] * w_yhi_xhi
+        )
+        # pdb.set_trace()
+        return z_est_sampled
+
+    "TODO" 
+    def extract_at_points_separatedS_crop_resize(
+        self,
+        z_est,
+        slice_fine_segm=None,
+        w_ylo_xlo=None,
+        w_ylo_xhi=None,
+        w_yhi_xlo=None,
+        w_yhi_xhi=None,
+        mode='bilinear',
+    ):
+        """
+        Extract ground truth values z_gt for valid point indices and estimated
+        values z_est using bilinear interpolation over top-left (y_lo, x_lo),
+        top-right (y_lo, x_hi), bottom-left (y_hi, x_lo) and bottom-right
+        (y_hi, x_hi) values in z_est with corresponding weights:
+        w_ylo_xlo, w_ylo_xhi, w_yhi_xlo and w_yhi_xhi.
+        Use slice_index_uv to slice dim=1 in z_est
+        """
+        # index_gt_all = self.tensors_helper.index_gt_all
+        # slice_index_uv = index_gt_all if slice_index_uv is None else slice_index_uv
+        # slice_fine_segm = (
+        #     self.tensors_helper.fine_segm_labels_gt if slice_fine_segm is None else slice_fine_segm
+        # )
+        w_ylo_xlo = self.w_ylo_xlo if w_ylo_xlo is None else w_ylo_xlo
+        w_ylo_xhi = self.w_ylo_xhi if w_ylo_xhi is None else w_ylo_xhi
+        w_yhi_xlo = self.w_yhi_xlo if w_yhi_xlo is None else w_yhi_xlo
+        w_yhi_xhi = self.w_yhi_xhi if w_yhi_xhi is None else w_yhi_xhi
+
+        assert (self.tensors_helper.bbox_xywh_gt - self.tensors_helper.bbox_xywh_est).mean()==0
+        x0_gt, y0_gt, w_gt, h_gt = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox].unbind(1)
+        index_bbox = self.tensors_helper.index_bbox
+        z_est_sampled_all = []
+        start = 0
+        for idx, pointnum in enumerate(self.tensors_helper.gt_pointnum_per_ins):
+            end = start + pointnum
+            img_idx = self.tensors_helper.index_img_per_ins[idx]
+            logitH, logitW = z_est.shape[-2], z_est.shape[-1]
+            imgH, imgW = self.tensors_helper.i_height[img_idx], self.tensors_helper.i_width[img_idx]
+            x,y,w,h = x0_gt[start], y0_gt[start], w_gt[start], h_gt[start]
+            sample_size = 256
+            # bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[self.tensors_helper.index_bbox][start:start+1]
+            bbox_xywh_in = self.tensors_helper.bbox_xywh_gt[idx:idx+1].clone()
+            # bbox_xywh_in = bbox_xywh_in/imgW*logitW
+            bbox_xywh_in[0][0] = bbox_xywh_in[0][0]/imgW*logitW
+            bbox_xywh_in[0][1] = bbox_xywh_in[0][1]/imgH*logitH
+            bbox_xywh_in[0][2] = bbox_xywh_in[0][2]/imgW*logitW
+            bbox_xywh_in[0][3] = bbox_xywh_in[0][3]/imgH*logitH
+            bbox_xywh_out = torch.tensor([[0,0,h,w],]).float().to(z_est.device)
+
+            z_est_ins = _resample_data_v2(z_est[idx:idx+1], 
+                                       bbox_xywh_out=bbox_xywh_out, 
+                                       bbox_xywh_in=bbox_xywh_in,  
+                                       wout=sample_size, hout=sample_size, 
+                                       mode=mode)
+            z_est_sampled = z_est_ins
+            z_est_sampled_all.append(z_est_sampled)
+
+            start = end
+
+        return torch.cat(z_est_sampled_all,dim=0)
+
+
 def resample_data(
     z, bbox_xywh_src, bbox_xywh_dst, wout, hout, mode="nearest", padding_mode="zeros"
 ):
@@ -776,5 +976,6 @@ def _extract_single_tensors_from_matches(proposals_with_targets: List[Instances]
         i_width,
         gt_pointnum_per_ins,
     )
+
 
 

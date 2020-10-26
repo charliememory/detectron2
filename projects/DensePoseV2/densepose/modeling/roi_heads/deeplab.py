@@ -5,6 +5,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from lambda_networks import LambdaLayer
+
 from detectron2.config import CfgNode
 from detectron2.layers import Conv2d
 
@@ -19,7 +21,7 @@ class DensePoseDeepLabHead(nn.Module):
     <https://arxiv.org/abs/1706.05587>.
     """
 
-    def __init__(self, cfg: CfgNode, input_channels: int, hidden_dim=None):
+    def __init__(self, cfg: CfgNode, input_channels: int, hidden_dim=None, num_lambda_layer=0):
         super(DensePoseDeepLabHead, self).__init__()
         # fmt: off
         hidden_dim           = cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM if hidden_dim is None else hidden_dim
@@ -38,6 +40,18 @@ class DensePoseDeepLabHead(nn.Module):
             self.NLBlock = NONLocalBlock2D(input_channels, bn_layer=True)
             self.add_module("NLBlock", self.NLBlock)
         # weight_init.c2_msra_fill(self.ASPP)
+
+        if num_lambda_layer>0:
+            for i in range(num_lambda_layer):
+                layer = LambdaLayer(
+                    dim = n_channels,
+                    dim_out = n_channels,
+                    r = 23,         # the receptive field for relative positional encoding (23 x 23)
+                    dim_k = 16,
+                    heads = 4,
+                    dim_u = 4
+                )
+                self.add_module("LambdaLayer_{}".format(i), layer)
 
         for i in range(self.n_stacked_convs):
             norm_module = nn.GroupNorm(32, hidden_dim) if norm == "GN" else None

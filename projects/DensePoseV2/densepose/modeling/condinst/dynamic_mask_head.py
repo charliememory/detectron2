@@ -3,7 +3,7 @@ import torch
 from torch.nn import functional as F
 from torch import nn
 
-from detectron2.structures import Instances
+from detectron2.structures import Instances, Boxes
 # from adet.utils.comm import compute_locations, aligned_bilinear
 from densepose.utils.comm import compute_locations, aligned_bilinear
 
@@ -17,9 +17,23 @@ from .. import (
 )
 import pdb
 
+def constrain_bbox(pred_instances: Instances):
+    for idx in range(len(pred_instances)):
+        ins = pred_instances[idx] 
+        imgH, imgW = ins.image_size
+        bbox_xyxy = ins.pred_boxes.tensor
+        for i in range(bbox_xyxy.shape[0]):
+            x1, y1, x2, y2 = bbox_xyxy[i]
+            bbox_xyxy[i][0] = max(x1,0)
+            bbox_xyxy[i][1] = max(y1,0)
+            bbox_xyxy[i][2] = min(x2,imgW-1)
+            bbox_xyxy[i][3] = min(y2,imgH-1)
+        pred_instances[idx].set('pred_boxes', Boxes(bbox_xyxy))
+    return pred_instances
 
 def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPredictorOutput, 
     pred_instances: Instances, size) -> List[Instances]:
+    pred_instances = constrain_bbox(pred_instances)
     S_list, I_list, U_list, V_list = [], [], [], []
     for idx in range(len(pred_instances)):
         ins = pred_instances[idx] 
@@ -38,10 +52,14 @@ def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPre
         I_list.append(densepose_outputs.fine_segm[im_idx:im_idx+1,:,y1:y2,x1:x2])
         U_list.append(densepose_outputs.u[im_idx:im_idx+1,:,y1:y2,x1:x2])
         V_list.append(densepose_outputs.v[im_idx:im_idx+1,:,y1:y2,x1:x2])
+    # pdb.set_trace()
+    # try:
     S_list = [F.interpolate(t,size=size,mode='bilinear') for t in S_list]
     I_list = [F.interpolate(t,size=size,mode='bilinear') for t in I_list]
     U_list = [F.interpolate(t,size=size,mode='bilinear') for t in U_list]
     V_list = [F.interpolate(t,size=size,mode='bilinear') for t in V_list]
+    # if len(S_list)==0:
+    #     pdb.set_trace()
 
     densepose_outputs = DensePoseChartPredictorOutput(
                                                         coarse_segm=torch.cat(S_list,dim=0),
@@ -49,6 +67,11 @@ def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPre
                                                         u=torch.cat(U_list,dim=0),
                                                         v=torch.cat(V_list,dim=0),
                                                      )
+    # pdb.set_trace()
+    # import imageio
+    # I = torch.argmax(I_list[0], dim=1)/24.0
+    # imageio.imwrite("tmp/I0.png", I[0].detach().cpu().numpy())
+
     pred_instances.set('pred_densepose', densepose_outputs)
     return pred_instances
 
@@ -266,10 +289,12 @@ class DynamicMaskHead(nn.Module):
         # return mask_logits[:,:-1,:,:], m.sigmoid()
 
     def __call__(self, iuv_head_func, iuv_feats, mask_feats, mask_feat_stride, pred_instances, gt_instances=None):
+        
         if self.training:
             gt_inds = pred_instances.gt_inds
             gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
             gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+            # pdb.set_trace()
 
             losses = {}
             if len(pred_instances) == 0:
@@ -340,10 +365,10 @@ class DynamicMaskHead(nn.Module):
                                                                     u=iuv_logits[:,25:50],
                                                                     v=iuv_logits[:,50:75],
                                                                  )
+                pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
+                                    pred_instances, size=(256,256))
             else:
                 densepose_outputs = None
-            pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
-                                pred_instances, size=(256,256))
             return pred_instances, densepose_outputs
 
 

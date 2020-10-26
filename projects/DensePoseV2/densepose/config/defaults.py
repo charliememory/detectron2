@@ -232,6 +232,7 @@ _C.MODEL.CONDINST.IUVHead.OUT_CHANNELS = 25*3
 _C.MODEL.CONDINST.IUVHead.CHANNELS = 128
 _C.MODEL.CONDINST.IUVHead.NORM = "GN" #"BN"
 _C.MODEL.CONDINST.IUVHead.NUM_CONVS = 3
+_C.MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER = 0
 
 # ---------------------------------------------------------------------------- #
 # TOP Module Options

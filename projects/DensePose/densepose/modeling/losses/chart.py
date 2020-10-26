@@ -370,6 +370,8 @@ class DensePoseChartLoss:
         v_est = interpolator.extract_at_points(
             densepose_predictor_outputs.v[tensors_helper.index_with_dp]
         )[j_valid_fg]
+        # import pdb
+        # pdb.set_trace()
         return {
             "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
             "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
