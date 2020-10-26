@@ -7,7 +7,7 @@ also installs detectron2 with a few simple commands.
 
 ### Requirements
 - Linux or macOS with Python ≥ 3.6
-- PyTorch ≥ 1.4 and [torchvision](https://github.com/pytorch/vision/) that matches the PyTorch installation.
+- PyTorch ≥ 1.5 and [torchvision](https://github.com/pytorch/vision/) that matches the PyTorch installation.
   You can install them together at [pytorch.org](https://pytorch.org) to make sure of this
 - OpenCV is optional and needed by demo and visualization
 
@@ -159,7 +159,7 @@ Two possibilities:
   This means the compiled code may not work on a different GPU device.
   To recompile them for the correct architecture, remove all installed/compiled files,
   and rebuild them with the `TORCH_CUDA_ARCH_LIST` environment variable set properly.
-  For example, `export TORCH_CUDA_ARCH_LIST=6.0,7.0` makes it compile for both P100s and V100s.
+  For example, `export TORCH_CUDA_ARCH_LIST="6.0;7.0"` makes it compile for both P100s and V100s.
 </details>
 
 <details>
