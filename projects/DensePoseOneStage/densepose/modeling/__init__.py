@@ -15,6 +15,7 @@ from .build import (
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 # Just to register models from adet 
+# To avoid KeyError: "No object named 'CondInst' found in 'META_ARCH' registry!"
 from .fcos import FCOS  
 from .backbone import build_fcos_resnet_fpn_backbone
 from .condinst import condinst

@@ -1,7 +1,7 @@
 VERSION: 2
 MODEL:
   META_ARCHITECTURE: "CondInst"
-  MASK_ON: True
+  # MASK_ON: True
   BACKBONE:
     NAME: "build_fcos_resnet_fpn_backbone"
   RESNETS:
