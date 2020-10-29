@@ -7,12 +7,14 @@ from detectron2.layers.batch_norm import get_norm
 
 def conv_with_kaiming_uniform(
         norm=None, activation=None,
-        use_deformable=False, use_sep=False):
+        use_deformable=False, use_sep=False, use_deconv=False):
     def make_conv(
         in_channels, out_channels, kernel_size, stride=1, dilation=1
     ):
         if use_deformable:
             conv_func = DFConv2d
+        elif use_deconv:
+            conv_func = nn.ConvTranspose2d
         else:
             conv_func = Conv2d
         if use_sep:

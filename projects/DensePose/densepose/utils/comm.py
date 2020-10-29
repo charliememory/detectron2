@@ -56,6 +56,37 @@ def compute_locations(h, w, stride, device):
     return locations
 
 
+# def meshgrid(self, height, width):
+#     x_t = torch.matmul(
+#         torch.ones(height, 1), torch.linspace(-1.0, 1.0, width).view(1, width))
+#     y_t = torch.matmul(
+#         torch.linspace(-1.0, 1.0, height).view(height, 1), torch.ones(1, width))
+
+#     grid_x = x_t.view(1, height, width)
+#     grid_y = y_t.view(1, height, width)
+#     return grid_x, grid_y
+
+# grid_x, grid_y = self.meshgrid(input_size[0], input_size[1])
+# with torch.cuda.device(input.get_device()):
+#     grid_x = torch.autograd.Variable(
+#         grid_x.repeat([input.size()[0], 1, 1])).cuda()
+#     grid_y = torch.autograd.Variable(
+#         grid_y.repeat([input.size()[0], 1, 1])).cuda()
+
+def compute_grid(h, w, device):
+    grid_x = torch.arange(
+        0, w, step=1,
+        dtype=torch.float32, device=device
+    )
+    grid_y = torch.arange(
+        0, h, step=1,
+        dtype=torch.float32, device=device
+    )
+    grid_y, grid_x = torch.meshgrid(grid_y/h, grid_x/w)
+    grid = torch.stack((grid_x, grid_y), dim=0)
+    return grid
+
+
 def SIUV_logit_to_iuv_batch(iuvlogit_batch, norm=False, use_numpy=False): 
     """
     Convert DensePose outputs to results format. Results are more compact,

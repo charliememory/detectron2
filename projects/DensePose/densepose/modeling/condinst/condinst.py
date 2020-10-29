@@ -18,6 +18,10 @@ from .dynamic_mask_head import build_dynamic_mask_head
 from .mask_branch import build_mask_branch
 from .iuv_head import build_iuv_head
 from .iuv_deeplab_head import build_iuv_deeplab_head
+from .iuv_unet_head import build_iuv_unet_head
+from .iuv_multiscale_head import build_iuv_multiscale_head
+from .iuv_multilayermask_head import build_iuv_multilayermask_head
+from .iuv_multilayercoord_head import build_iuv_multilayercoord_head
 
 # from adet.utils.comm import aligned_bilinear
 from densepose.utils.comm import aligned_bilinear
@@ -53,12 +57,22 @@ class CondInst(nn.Module):
         ##
         if cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseDeepLabHead":
             self.iuv_head = build_iuv_deeplab_head(cfg)
+        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseUnetHead":
+            self.iuv_head = build_iuv_unet_head(cfg)
+        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultiscaleHead":
+            self.iuv_head = build_iuv_multiscale_head(cfg)
+        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultilayermaskHead":
+            self.iuv_head = build_iuv_multilayermask_head(cfg)
+        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultilayercoordHead":
+            self.iuv_head = build_iuv_multilayercoord_head(cfg)
         else:
             self.iuv_head = build_iuv_head(cfg)
         self.iuv_fea_dim = cfg.MODEL.CONDINST.IUVHead.CHANNELS
         self.s_ins_fea_dim = cfg.MODEL.CONDINST.MASK_HEAD.CHANNELS
+        self.use_mask_feats_iuvhead = cfg.MODEL.CONDINST.IUVHead.USE_MASK_FEATURES
+        self.mask_out_bg_feats = cfg.MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES
         # assert self.iuv_fea_dim+self.s_ins_fea_dim == cfg.MODEL.CONDINST.MASK_BRANCH.OUT_CHANNELS
-        assert cfg.MODEL.CONDINST.IUVHead.CHANNELS==cfg.MODEL.CONDINST.MASK_BRANCH.CHANNELS
+        # assert cfg.MODEL.CONDINST.IUVHead.CHANNELS==cfg.MODEL.CONDINST.MASK_BRANCH.CHANNELS
         ##
         self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
         self.max_proposals = cfg.MODEL.CONDINST.MAX_PROPOSALS
@@ -123,15 +137,19 @@ class CondInst(nn.Module):
 
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-            if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
-                pdb.set_trace()
+            # if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
+            #     pdb.set_trace()
             self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
         else:
             gt_instances = None
 
         agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
         # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
-        iuv_feats, s_ins_feats = agg_feats, mask_feats
+        if self.use_mask_feats_iuvhead:
+            iuv_feats, s_ins_feats = mask_feats, mask_feats
+        else:
+            iuv_feats, s_ins_feats = agg_feats, mask_feats
+
         # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
         # pdb.set_trace()
 
@@ -235,7 +253,7 @@ class CondInst(nn.Module):
         # )
         loss_mask = self.mask_head(self.iuv_head, iuv_feats,
             mask_feats, self.mask_branch.out_stride,
-            pred_instances, gt_instances
+            pred_instances, gt_instances=gt_instances, mask_out_bg_feats=self.mask_out_bg_feats
         )
 
         return loss_mask
@@ -252,7 +270,8 @@ class CondInst(nn.Module):
         # )
 
         densepose_instances, densepose_outputs = self.mask_head(self.iuv_head, iuv_feats,
-            mask_feats, self.mask_branch.out_stride, pred_instances
+            mask_feats, self.mask_branch.out_stride, 
+            pred_instances, mask_out_bg_feats=self.mask_out_bg_feats
         )
 
         # im_inds = densepose_instances.get('im_inds')

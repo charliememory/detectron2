@@ -26,11 +26,11 @@ INF = 100000000
 
 
 def build_iuv_deeplab_head(cfg):
-    # return GlobalIUVDeepLabHeadAfterMaskBranch(cfg)
-    return CoordGlobalIUVDeepLabHeadAfterMaskBranch(cfg)
+    # return GlobalIUVDeepLabHead(cfg)
+    return CoordGlobalIUVDeepLabHead(cfg)
 
 
-class CoordGlobalIUVDeepLabHeadAfterMaskBranch(nn.Module):
+class CoordGlobalIUVDeepLabHead(nn.Module):
     def __init__(self, cfg, use_rel_coords=True):
         super().__init__()
         self.num_outputs = cfg.MODEL.CONDINST.IUVHead.OUT_CHANNELS
@@ -42,7 +42,7 @@ class CoordGlobalIUVDeepLabHeadAfterMaskBranch(nn.Module):
         soi = cfg.MODEL.FCOS.SIZES_OF_INTEREST
         self.register_buffer("sizes_of_interest", torch.tensor(soi + [soi[-1] * 2]))
         self.iuv_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
-        self.use_rel_coords = cfg.MODEL.ROI_DENSEPOSE_HEAD.REL_COORDS
+        self.use_rel_coords = cfg.MODEL.CONDINST.IUVHead.REL_COORDS
         # pdb.set_trace()
         # if self.use_rel_coords:
         #     self.in_channels = channels + 2
@@ -137,7 +137,7 @@ class CoordGlobalIUVDeepLabHeadAfterMaskBranch(nn.Module):
         return iuv_logit
 
 
-class GlobalIUVDeepLabHeadAfterMaskBranch(nn.Module):
+class GlobalIUVDeepLabHead(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.num_outputs = cfg.MODEL.CONDINST.IUVHead.OUT_CHANNELS

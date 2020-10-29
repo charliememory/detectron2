@@ -288,7 +288,18 @@ class DynamicMaskHead(nn.Module):
         # m = mask_logits[:,-1:,:,:]
         # return mask_logits[:,:-1,:,:], m.sigmoid()
 
-    def __call__(self, iuv_head_func, iuv_feats, mask_feats, mask_feat_stride, pred_instances, gt_instances=None):
+    def _torch_dilate(self, binary_img, kernel_size=3, mode='nearest'):
+        if not hasattr(self, 'dilate_kernel'):
+            # self.dilate_kernel = torch.Tensor(torch.ones([kernel_size,kernel_size]), device=binary_img.device)[None,None,...]
+            self.dilate_kernel = torch.ones([1,1,kernel_size,kernel_size], device=binary_img.device)
+        # pdb.set_trace()
+        pad = nn.ReflectionPad2d(int(kernel_size//2))
+        out = torch.clamp(torch.nn.functional.conv2d(pad(binary_img), self.dilate_kernel, padding=0), 0, 1)
+        out = F.interpolate(out, size=binary_img.shape[2:], mode=mode)
+        return out
+
+    def __call__(self, iuv_head_func, iuv_feats, mask_feats, mask_feat_stride, pred_instances, 
+            gt_instances=None, mask_out_bg_feats="none"):
         
         if self.training:
             gt_inds = pred_instances.gt_inds
@@ -315,18 +326,47 @@ class DynamicMaskHead(nn.Module):
                 else:
                     raise NotImplementedError
 
-                iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
+                if mask_out_bg_feats is not "none":
+                    N = iuv_feats.shape[0]
+                    fg_mask = s_logits.detach()
+                    fg_mask_list = []
+                    for i in range(N):
+                        fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
+                    fg_mask = torch.cat(fg_mask_list, dim=0).detach()
+                    if mask_out_bg_feats=="hard":
+                        fg_mask = (fg_mask>0.05).float()
+                        fg_mask = self._torch_dilate(fg_mask, kernel_size=3)
+                    # pdb.set_trace()
+                    # import imageio
+                    # imageio.imwrite("tmp/fg_mask_soft.png", fg_mask_list[0][0,0].detach().cpu().numpy())
+                    # imageio.imwrite("tmp/fg_mask_hard_0.1.png", (fg_mask_list[0][0,0]>0.1).float().detach().cpu().numpy())
+                    # imageio.imwrite("tmp/fg_mask_hard_0.05.png", (fg_mask_list[0][0,0]>0.05).float().detach().cpu().numpy())
+                    # imageio.imwrite("tmp/fg_mask_hard_0.05_dilate.png", fg_mask[0,0].detach().cpu().numpy())
+
+                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, pred_instances)
+                else:
+                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
                 
                 assert mask_feat_stride >= self.mask_out_stride
                 assert mask_feat_stride % self.mask_out_stride == 0
                 s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
 
-                densepose_outputs = DensePoseChartPredictorOutput(
-                                                                    coarse_segm=s_logits,
-                                                                    fine_segm=iuv_logits[:,:25],
-                                                                    u=iuv_logits[:,25:50],
-                                                                    v=iuv_logits[:,50:75],
-                                                                 )
+                if isinstance(iuv_logits, list):
+                    densepose_outputs = []
+                    for iuv in iuv_logits:
+                        densepose_outputs.append(DensePoseChartPredictorOutput(
+                                                                            coarse_segm=s_logits,
+                                                                            fine_segm=iuv[:,:25],
+                                                                            u=iuv[:,25:50],
+                                                                            v=iuv[:,50:75],
+                                                                         ))
+                else:
+                    densepose_outputs = DensePoseChartPredictorOutput(
+                                                                        coarse_segm=s_logits,
+                                                                        fine_segm=iuv_logits[:,:25],
+                                                                        u=iuv_logits[:,25:50],
+                                                                        v=iuv_logits[:,50:75],
+                                                                     )
                 for i in range(len(gt_instances)):
                     gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
 
@@ -343,6 +383,13 @@ class DynamicMaskHead(nn.Module):
                     mask_feats, mask_feat_stride, pred_instances
                 )
 
+                # if self.n_segm_chan==1:
+                #     s_logits = s_logits.sigmoid()
+                # elif self.n_segm_chan==3:
+                #     s_logits = s_logits[:,:1].sigmoid()
+                # else:
+                #     raise NotImplementedError
+
                 if self.n_segm_chan==1:
                     "To mimic 2 channels segmentation during inference"
                     s_logits = s_logits.sigmoid()
@@ -353,11 +400,31 @@ class DynamicMaskHead(nn.Module):
                 else:
                     raise NotImplementedError
 
-                iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
+                if mask_out_bg_feats is not "none":
+                    N = iuv_feats.shape[0]
+                    fg_mask = s_logits[:,-1:].detach()
+                    fg_mask_list = []
+                    for i in range(N):
+                        fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
+                    fg_mask = torch.cat(fg_mask_list, dim=0).detach()
+                    if mask_out_bg_feats=="hard":
+                        fg_mask = (fg_mask>0.1).float()
+                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, pred_instances)
+                else:
+                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
+                
+                # iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
 
                 assert mask_feat_stride >= self.mask_out_stride
                 assert mask_feat_stride % self.mask_out_stride == 0
                 s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
+
+                ## multiscale aggregation during infereance (average)
+                if isinstance(iuv_logits, list):
+                    H = max([iuv.shape[-2] for iuv in iuv_logits])
+                    W = max([iuv.shape[-1] for iuv in iuv_logits])
+                    iuv_logits = [F.interpolate(iuv, size=(H,W)) for iuv in iuv_logits]
+                    iuv_logits = torch.stack(iuv_logits, dim=0).mean(dim=0)
 
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=s_logits,
