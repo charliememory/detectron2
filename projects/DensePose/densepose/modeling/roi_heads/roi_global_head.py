@@ -7,7 +7,7 @@ import torch, pdb, os, pickle
 import torch.nn as nn
 from torch.nn import functional as F
 
-from detectron2.layers import Conv2d, ShapeSpec, get_norm
+from detectron2.layers import Conv2d, ShapeSpec, get_norm, ConvTranspose2d
 from detectron2.modeling import ROI_HEADS_REGISTRY, StandardROIHeads
 from detectron2.modeling.poolers import ROIPooler
 from detectron2.modeling.roi_heads import select_foreground_proposals
@@ -20,6 +20,7 @@ from .. import (
     build_densepose_predictor,
     densepose_inference,
 )
+from ...structures import DensePoseChartPredictorOutput
 
 import io, copy
 class CPU_Unpickler(pickle.Unpickler):
@@ -28,7 +29,7 @@ class CPU_Unpickler(pickle.Unpickler):
             return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
         else: return super().find_class(module, name)
 
-class Decoder(nn.Module):
+class DecoderGlobal(nn.Module):
     """
     A semantic segmentation head described in detail in the Panoptic Feature Pyramid Networks paper
     (https://arxiv.org/abs/1901.02446). It takes FPN features as input and merges information from
@@ -36,13 +37,14 @@ class Decoder(nn.Module):
     """
 
     def __init__(self, cfg, input_shape: Dict[str, ShapeSpec], in_features):
-        super(Decoder, self).__init__()
+        super(DecoderGlobal, self).__init__()
 
         # fmt: off
         self.in_features      = in_features
         feature_strides       = {k: v.stride for k, v in input_shape.items()}
         feature_channels      = {k: v.channels for k, v in input_shape.items()}
-        num_classes           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_NUM_CLASSES
+        # num_classes           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_NUM_CLASSES
+        num_classes = 77
         conv_dims             = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_CONV_DIMS
         self.common_stride    = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_COMMON_STRIDE
         norm                  = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_NORM
@@ -73,8 +75,37 @@ class Decoder(nn.Module):
                     )
             self.scale_heads.append(nn.Sequential(*head_ops))
             self.add_module(in_feature, self.scale_heads[-1])
-        self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
-        weight_init.c2_msra_fill(self.predictor)
+
+        # self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
+        
+        self.densepose_head = build_densepose_head(cfg, conv_dims)
+
+        # predictor = []
+        # for k in range(7):
+        #     conv = Conv2d(
+        #         conv_dims,
+        #         conv_dims,
+        #         kernel_size=3,
+        #         stride=1,
+        #         padding=1,
+        #         bias=not norm,
+        #         norm=get_norm(norm, conv_dims),
+        #         activation=F.relu,
+        #     )
+        #     weight_init.c2_msra_fill(conv)
+        #     predictor.append(conv)
+
+        # conv = ConvTranspose2d(
+        #     conv_dims, num_classes, 3, stride=2, padding=1
+        # )
+        # weight_init.c2_msra_fill(conv)
+        # predictor.append(conv)
+        # self.add_module("predictor", nn.Sequential(*predictor))
+        
+
+        self.predictor = Conv2d(
+            cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
+        )
 
     def forward(self, features: List[torch.Tensor]):
         for i, _ in enumerate(self.in_features):
@@ -82,12 +113,14 @@ class Decoder(nn.Module):
                 x = self.scale_heads[i](features[i])
             else:
                 x = x + self.scale_heads[i](features[i])
+        # pdb.set_trace()
+        x = self.densepose_head(x)
         x = self.predictor(x)
         return x
 
 
 @ROI_HEADS_REGISTRY.register()
-class DensePoseROIHeads(StandardROIHeads):
+class DensePoseROIGlobalHeads(StandardROIHeads):
     """
     A Standard ROIHeads which contains an addition of DensePose head.
     """
@@ -102,11 +135,14 @@ class DensePoseROIHeads(StandardROIHeads):
         if not self.densepose_on:
             return
         self.densepose_data_filter = build_densepose_data_filter(cfg)
-        dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_RESOLUTION
-        dp_pooler_sampling_ratio   = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_SAMPLING_RATIO
+        # dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_RESOLUTION
+        # dp_pooler_sampling_ratio   = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_SAMPLING_RATIO
+        dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.HEATMAP_SIZE
+        dp_pooler_sampling_ratio   = 0
         dp_pooler_type             = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_TYPE
         self.use_decoder           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ON
         # fmt: on
+        assert self.use_decoder
         if self.use_decoder:
             dp_pooler_scales = (1.0 / input_shape[self.in_features[0]].stride,)
         else:
@@ -114,7 +150,7 @@ class DensePoseROIHeads(StandardROIHeads):
         in_channels = [input_shape[f].channels for f in self.in_features][0]
 
         if self.use_decoder:
-            self.decoder = Decoder(cfg, input_shape, self.in_features)
+            self.decoder = DecoderGlobal(cfg, input_shape, self.in_features)
 
         self.densepose_pooler = ROIPooler(
             output_size=dp_pooler_resolution,
@@ -122,10 +158,10 @@ class DensePoseROIHeads(StandardROIHeads):
             sampling_ratio=dp_pooler_sampling_ratio,
             pooler_type=dp_pooler_type,
         )
-        self.densepose_head = build_densepose_head(cfg, in_channels)
-        self.densepose_predictor = build_densepose_predictor(
-            cfg, self.densepose_head.n_out_channels
-        )
+        # self.densepose_head = build_densepose_head(cfg, in_channels)
+        # self.densepose_predictor = build_densepose_predictor(
+        #     cfg, self.densepose_head.n_out_channels
+        # )
         self.densepose_losses = build_densepose_losses(cfg)
 
     def _forward_densepose(self, features: Dict[str, torch.Tensor], instances: List[Instances]):
@@ -156,24 +192,39 @@ class DensePoseROIHeads(StandardROIHeads):
             if len(proposals) > 0:
                 proposal_boxes = [x.proposal_boxes for x in proposals]
 
+                assert self.use_decoder
                 if self.use_decoder:
                     features = [self.decoder(features)]
 
                 features_dp = self.densepose_pooler(features, proposal_boxes)
-                densepose_head_outputs = self.densepose_head(features_dp)
-                densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                # pdb.set_trace()
+                # densepose_head_outputs = self.densepose_head(features_dp)
+                # densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                densepose_predictor_outputs = DensePoseChartPredictorOutput(
+                                                coarse_segm=features_dp[:,:2],
+                                                fine_segm=features_dp[:,2:27],
+                                                u=features_dp[:,27:52],
+                                                v=features_dp[:,52:77],
+                                            )
                 densepose_loss_dict = self.densepose_losses(proposals, densepose_predictor_outputs)
                 return densepose_loss_dict
         else:
             pred_boxes = [x.pred_boxes for x in instances]
 
+            assert self.use_decoder
             if self.use_decoder:
                 features = [self.decoder(features)]
 
             features_dp = self.densepose_pooler(features, pred_boxes)
             if len(features_dp) > 0:
-                densepose_head_outputs = self.densepose_head(features_dp)
-                densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                # densepose_head_outputs = self.densepose_head(features_dp)
+                # densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                densepose_predictor_outputs = DensePoseChartPredictorOutput(
+                                                coarse_segm=features_dp[:,:2],
+                                                fine_segm=features_dp[:,2:27],
+                                                u=features_dp[:,27:52],
+                                                v=features_dp[:,52:77],
+                                            )
             else:
                 densepose_predictor_outputs = None
 
@@ -377,6 +428,7 @@ class DensePoseROIHeads(StandardROIHeads):
         targets: Optional[List[Instances]] = None,
     ):
         instances, losses = super().forward(images, features, proposals, targets)
+        # pdb.set_trace()
         del targets, images
 
         if self.training:

@@ -40,7 +40,7 @@ def aligned_bilinear(tensor, factor):
     return tensor[:, :, :oh - 1, :ow - 1]
 
 
-def compute_locations(h, w, stride, device):
+def compute_locations(h, w, stride, device, norm=False):
     shifts_x = torch.arange(
         0, w * stride, step=stride,
         dtype=torch.float32, device=device
@@ -52,7 +52,12 @@ def compute_locations(h, w, stride, device):
     shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x)
     shift_x = shift_x.reshape(-1)
     shift_y = shift_y.reshape(-1)
-    locations = torch.stack((shift_x, shift_y), dim=1) + stride // 2
+    if norm:
+        shift_x = shift_x.float()/(w * stride)
+        shift_y = shift_y.float()/(h * stride)
+        locations = torch.stack((shift_x, shift_y), dim=1)
+    else:
+        locations = torch.stack((shift_x, shift_y), dim=1) + stride // 2
     return locations
 
 
@@ -73,7 +78,7 @@ def compute_locations(h, w, stride, device):
 #     grid_y = torch.autograd.Variable(
 #         grid_y.repeat([input.size()[0], 1, 1])).cuda()
 
-def compute_grid(h, w, device):
+def compute_grid(h, w, device, norm=True):
     grid_x = torch.arange(
         0, w, step=1,
         dtype=torch.float32, device=device
@@ -82,7 +87,10 @@ def compute_grid(h, w, device):
         0, h, step=1,
         dtype=torch.float32, device=device
     )
-    grid_y, grid_x = torch.meshgrid(grid_y/h, grid_x/w)
+    if norm:
+        grid_y, grid_x = torch.meshgrid(grid_y/h, grid_x/w)
+    else:
+        grid_y, grid_x = torch.meshgrid(grid_y, grid_x)
     grid = torch.stack((grid_x, grid_y), dim=0)
     return grid
 

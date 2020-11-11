@@ -126,6 +126,16 @@ def convert_condInst_to_densepose_inference(densepose_outputs: DensePoseChartPre
 
 #     return pred_instances
 
+def dice_coefficient(x, target):
+    eps = 1e-5
+    n_inst = x.size(0)
+    x = x.reshape(n_inst, -1)
+    target = target.reshape(n_inst, -1)
+    intersection = (x * target).sum(dim=1)
+    union = (x ** 2.0).sum(dim=1) + (target ** 2.0).sum(dim=1) + eps
+    loss = 1. - (2 * intersection / union)
+    return loss
+
 
 def parse_dynamic_params(params, channels, weight_nums, bias_nums, n_segm_chan):
     assert params.dim() == 2
@@ -149,6 +159,7 @@ def parse_dynamic_params(params, channels, weight_nums, bias_nums, n_segm_chan):
             bias_splits[l] = bias_splits[l].reshape(num_insts * channels)
         else:
             # out_channels x in_channels x 1 x 1
+            # pdb.set_trace()
             weight_splits[l] = weight_splits[l].reshape(num_insts * n_segm_chan, -1, 1, 1)
             bias_splits[l] = bias_splits[l].reshape(num_insts * n_segm_chan)
 
@@ -174,7 +185,8 @@ class DynamicMaskHead(nn.Module):
         self.register_buffer("sizes_of_interest", torch.tensor(soi + [soi[-1] * 2]))
 
 
-        self.n_segm_chan = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
+        # self.n_segm_chan = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
+        self.n_segm_chan = 1
         # self.n_segm_chan = 2 + 1 ## S logit (of SIUV) has 2-channels, instance mask has 1-channel
 
         weight_nums, bias_nums = [], []
@@ -213,11 +225,16 @@ class DynamicMaskHead(nn.Module):
         #     cfg, self.densepose_head.n_out_channels
         # )
         ## DensePose related
+        self.densepose_data_filter = build_densepose_data_filter(cfg)
         self.densepose_losses = build_densepose_losses(cfg)
         self.heatmap_size = cfg.MODEL.ROI_DENSEPOSE_HEAD.HEATMAP_SIZE
-        self.n_segm_chan  = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
+        # self.n_segm_chan  = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
+        # self.n_segm_chan = 1
         self.segm_trained_by_masks = cfg.MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS
         self.w_segm       = cfg.MODEL.ROI_DENSEPOSE_HEAD.INDEX_WEIGHTS
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
+        self.norm_coord_boxHW = cfg.MODEL.CONDINST.IUVHead.NORM_COORD_BOXHW
+        self.dilate_ks = cfg.MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE
 
     def mask_heads_forward(self, features, weights, biases, num_insts):
         '''
@@ -240,7 +257,7 @@ class DynamicMaskHead(nn.Module):
         return x
 
     def mask_heads_forward_with_coords(
-            self, mask_feats, mask_feat_stride, instances
+            self, mask_feats, mask_feat_stride, instances, norm_coord_boxHW=False
     ):
         locations = compute_locations(
             mask_feats.size(2), mask_feats.size(3),
@@ -255,9 +272,11 @@ class DynamicMaskHead(nn.Module):
 
         if not self.disable_rel_coords:
             instance_locations = instances.locations
+            # pdb.set_trace()
             relative_coords = instance_locations.reshape(-1, 1, 2) - locations.reshape(1, -1, 2)
             relative_coords = relative_coords.permute(0, 2, 1).float()
             soi = self.sizes_of_interest.float()[instances.fpn_levels]
+            # pdb.set_trace()
             relative_coords = relative_coords / soi.reshape(-1, 1, 1)
             relative_coords = relative_coords.to(dtype=mask_feats.dtype)
 
@@ -265,6 +284,7 @@ class DynamicMaskHead(nn.Module):
                 relative_coords, mask_feats[im_inds].reshape(n_inst, self.in_channels, H * W)
             ], dim=1)
         else:
+            relative_coords = None
             mask_head_inputs = mask_feats[im_inds].reshape(n_inst, self.in_channels, H * W)
 
         mask_head_inputs = mask_head_inputs.reshape(1, -1, H, W)
@@ -284,7 +304,20 @@ class DynamicMaskHead(nn.Module):
         # assert mask_feat_stride % self.mask_out_stride == 0
         # mask_logits = aligned_bilinear(mask_logits, int(mask_feat_stride / self.mask_out_stride))
 
-        return mask_logits
+        if norm_coord_boxHW:
+            # pdb.set_trace()
+            cnt = 0
+            for idx in range(N):
+                imgH, imgW = instances[idx].image_size
+                # pdb.set_trace()
+                boxes = instances[idx].pred_boxes.tensor
+                for i in range(boxes.shape[0]):
+                    boxH, boxW = boxes[i,3]-boxes[i,1], boxes[i,2]-boxes[i,0]
+                    relative_coords[cnt+i,0:1] = relative_coords[cnt+i,0:1]*imgW/boxW
+                    relative_coords[cnt+i,1:2] = relative_coords[cnt+i,1:2]*imgH/boxH
+                cnt += boxes.shape[0]
+
+        return mask_logits, relative_coords
         # m = mask_logits[:,-1:,:,:]
         # return mask_logits[:,:-1,:,:], m.sigmoid()
 
@@ -298,7 +331,59 @@ class DynamicMaskHead(nn.Module):
         out = F.interpolate(out, size=binary_img.shape[2:], mode=mode)
         return out
 
-    def __call__(self, iuv_head_func, iuv_feats, mask_feats, mask_feat_stride, pred_instances, 
+    def _create_rel_coord_gt(self, gt_instances, H, W, stride, device, norm_coord_boxHW=True):
+        
+        N = len(gt_instances)
+        gt_locations_list = []
+        for idx in range(N):
+            boxes = gt_instances[idx].gt_boxes.tensor.clone()
+            imgH, imgW = gt_instances[idx].image_size
+            boxes[:,0] = boxes[:,0]/imgW
+            boxes[:,1] = boxes[:,1]/imgH
+            boxes[:,2] = boxes[:,2]/imgW
+            boxes[:,3] = boxes[:,3]/imgH
+            gt_locations_list.append(
+                torch.stack([(boxes[:,0]+boxes[:,2])*0.5, (boxes[:,1]+boxes[:,3])*0.5], dim=1)
+            )
+        instance_locations = torch.cat(gt_locations_list, dim=0)
+
+        gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
+
+        locations = compute_locations(
+            H, W, 
+            stride=stride, 
+            device=device,
+            norm=True,
+        )
+
+        # instance_locations = instances.locations
+        relative_coords = instance_locations.reshape(-1, 1, 2) - locations.reshape(1, -1, 2)
+        relative_coords = relative_coords.permute(0, 2, 1).float()
+        # relative_coords = relative_coords.to(dtype=rel_coord_est.dtype)
+        if norm_coord_boxHW:
+            # pdb.set_trace()
+            cnt = 0
+            for idx in range(N):
+                imgH, imgW = gt_instances[idx].image_size
+                boxes = gt_instances[idx].gt_boxes.tensor
+                for i in range(boxes.shape[0]):
+                    boxH, boxW = boxes[i,3]-boxes[i,1], boxes[i,2]-boxes[i,0]
+                    relative_coords[cnt+i,0:1] = relative_coords[cnt+i,0:1]*imgW/boxW
+                    relative_coords[cnt+i,1:2] = relative_coords[cnt+i,1:2]*imgH/boxH
+                cnt += boxes.shape[0]
+
+        rel_coord_gt = torch.zeros([N,2,H,W], device=device).float()
+        gt_bitmasks = F.interpolate(gt_bitmasks[:,None,...].float(), size=(H,W), mode='nearest')
+        coord_all = relative_coords.reshape(-1, 2, H, W) * gt_bitmasks
+        cnt = 0
+        for idx in range(N):
+            num = gt_instances[idx].gt_bitmasks.shape[0]
+            coord = torch.mean(coord_all[cnt:cnt+num], dim=0, keepdim=True) 
+            cnt += num
+            rel_coord_gt[idx:idx+1] = coord #.reshape(1, 2, H, W)
+        return rel_coord_gt
+
+    def __call__(self, iuv_head_func, fpn_features, mask_feats, iuv_feats, mask_feat_stride, pred_instances, 
             gt_instances=None, mask_out_bg_feats="none"):
         
         if self.training:
@@ -316,9 +401,12 @@ class DynamicMaskHead(nn.Module):
                 losses["loss_densepose_V"] = mask_feats.sum() * 0
                 losses["loss_densepose_S"] = mask_feats.sum() * 0
             else:
-                s_logits = self.mask_heads_forward_with_coords(
+                s_logits, relative_coords = self.mask_heads_forward_with_coords(
                     mask_feats, mask_feat_stride, pred_instances
                 )
+                assert mask_feat_stride >= self.mask_out_stride
+                assert mask_feat_stride % self.mask_out_stride == 0
+                s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
                 if self.n_segm_chan==1:
                     s_logits = s_logits.sigmoid()
                 elif self.n_segm_chan==3:
@@ -326,61 +414,130 @@ class DynamicMaskHead(nn.Module):
                 else:
                     raise NotImplementedError
 
-                if mask_out_bg_feats is not "none":
-                    N = iuv_feats.shape[0]
-                    fg_mask = s_logits.detach()
-                    fg_mask_list = []
-                    for i in range(N):
-                        fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
-                    fg_mask = torch.cat(fg_mask_list, dim=0).detach()
-                    if mask_out_bg_feats=="hard":
-                        fg_mask = (fg_mask>0.05).float()
-                        fg_mask = self._torch_dilate(fg_mask, kernel_size=3)
+                if iuv_head_func is None:
+                    assert mask_feat_stride >= self.mask_out_stride
+                    assert mask_feat_stride % self.mask_out_stride == 0
+                    s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
+                    loss_mask = dice_coefficient(s_logits, gt_bitmasks)
+                    losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
+                else:
+                    ## create_rel_coord_gt if needed
+                    # H, W = s_logits.shape[-2:]
+                    N, _, H, W = fpn_features[list(fpn_features.keys())[0]].shape
+                    N_ins = mask_feats.shape[0]
+                    if self.use_gt_ins:
+                        rel_coord = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device, self.norm_coord_boxHW)
+                    else:
+                        "TODO: upsample or recalculate rel_coord"
+                        assert not self.norm_coord_boxHW
+                        im_inds = pred_instances.im_inds
+                        rel_coord_list = []
+                        for idx in range(N_ins):
+                            if idx in im_inds:
+                                # pdb.set_trace()
+                                cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+                                ss = s_logits[im_inds==idx,-1:]
+                                coord = torch.mean(cc*ss, dim=0, keepdim=True) 
+                                rel_coord_list.append(coord) #.reshape(1, 2, H, W)
+                        rel_coord = torch.cat(rel_coord_list, dim=0)
+
+                    ########## Debug
                     # pdb.set_trace()
                     # import imageio
-                    # imageio.imwrite("tmp/fg_mask_soft.png", fg_mask_list[0][0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/fg_mask_hard_0.1.png", (fg_mask_list[0][0,0]>0.1).float().detach().cpu().numpy())
-                    # imageio.imwrite("tmp/fg_mask_hard_0.05.png", (fg_mask_list[0][0,0]>0.05).float().detach().cpu().numpy())
-                    # imageio.imwrite("tmp/fg_mask_hard_0.05_dilate.png", fg_mask[0,0].detach().cpu().numpy())
 
-                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, pred_instances)
-                else:
-                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
-                
-                assert mask_feat_stride >= self.mask_out_stride
-                assert mask_feat_stride % self.mask_out_stride == 0
-                s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
+                    # rel_coord = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device)
+                    # rel_coord_gt = rel_coord.clone()
 
-                if isinstance(iuv_logits, list):
-                    densepose_outputs = []
-                    for iuv in iuv_logits:
-                        densepose_outputs.append(DensePoseChartPredictorOutput(
+                    # im_inds = pred_instances.im_inds
+                    # rel_coord_list = []
+                    # for idx in range(N_ins):
+                    #     if idx in im_inds:
+                    #         cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+                    #         ss = s_logits[im_inds==idx,-1:]
+                    #         coord = torch.mean(cc*ss, dim=0, keepdim=True) 
+                    #         rel_coord_list.append(coord) #.reshape(1, 2, H, W)
+                    # rel_coord = torch.cat(rel_coord_list, dim=0)
+
+                    # imageio.imwrite('tmp/rel_coord_gt.png',rel_coord_gt[0,0].detach().cpu().numpy())
+                    # imageio.imwrite('tmp/rel_coord.png',rel_coord[0,0].detach().cpu().numpy())
+                    # r = rel_coord_gt[0,0]
+                    # g = rel_coord[0,0]
+                    # b = torch.zeros_like(g)
+                    # imageio.imwrite('tmp/rel_coord_gt_est.png',torch.stack([r,g,b],dim=-1).detach().cpu().numpy())
+                    # pdb.set_trace()
+                    ##########
+
+
+                    if mask_out_bg_feats == "none":
+                        fg_mask = torch.ones([N,1,H,W], device=iuv_feats.device)
+                    else:
+                        # N = iuv_feats.shape[0]
+                        fg_mask = s_logits.detach()
+                        fg_mask_list = []
+                        for i in range(N_ins):
+                            fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
+                        fg_mask = torch.cat(fg_mask_list, dim=0).detach()
+                        # if mask_out_bg_feats=="hard":
+                        if self.use_gt_ins:
+                            fg_mask = (rel_coord[:,0:1]!=0).float()
+                        else:
+                            fg_mask = (fg_mask>0.05).float()
+                        fg_mask = F.interpolate(fg_mask, (H,W))
+                    if self.dilate_ks>0:
+                        fg_mask = self._torch_dilate(fg_mask, kernel_size=self.dilate_ks)
+
+                            # pdb.set_trace()
+                            # import imageio
+                            # imageio.imwrite("tmp/fg_mask_soft.png", fg_mask_list[0][0,0].detach().cpu().numpy())
+                            # imageio.imwrite("tmp/fg_mask_hard_0.1.png", (fg_mask_list[0][0,0]>0.1).float().detach().cpu().numpy())
+                            # imageio.imwrite("tmp/fg_mask_hard_0.05.png", (fg_mask_list[0][0,0]>0.05).float().detach().cpu().numpy())
+                            # imageio.imwrite("tmp/fg_mask_hard_0.05_dilate.png", fg_mask[0,0].detach().cpu().numpy())
+
+                    # if mask_out_bg_feats != "none":
+                    #     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
+                    # else:
+                    iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
+                    # pdb.set_trace()
+
+                    if isinstance(iuv_logits, list):
+                        densepose_outputs = []
+                        for iuv in iuv_logits:
+                            densepose_outputs.append(DensePoseChartPredictorOutput(
+                                                                                coarse_segm=s_logits,
+                                                                                fine_segm=iuv[:,:25],
+                                                                                u=iuv[:,25:50],
+                                                                                v=iuv[:,50:75],
+                                                                                aux_supervision=iuv[:,75:],
+                                                                                stride=self.mask_out_stride,
+                                                                             ))
+                    else:
+                        densepose_outputs = DensePoseChartPredictorOutput(
                                                                             coarse_segm=s_logits,
-                                                                            fine_segm=iuv[:,:25],
-                                                                            u=iuv[:,25:50],
-                                                                            v=iuv[:,50:75],
-                                                                         ))
-                else:
-                    densepose_outputs = DensePoseChartPredictorOutput(
-                                                                        coarse_segm=s_logits,
-                                                                        fine_segm=iuv_logits[:,:25],
-                                                                        u=iuv_logits[:,25:50],
-                                                                        v=iuv_logits[:,50:75],
-                                                                     )
-                for i in range(len(gt_instances)):
-                    gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
+                                                                            fine_segm=iuv_logits[:,:25],
+                                                                            u=iuv_logits[:,25:50],
+                                                                            v=iuv_logits[:,50:75],
+                                                                            aux_supervision=iuv_logits[:,75:],
+                                                                            stride=self.mask_out_stride,
+                                                                         )
+                    for i in range(len(gt_instances)):
+                        gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
 
-                densepose_loss_dict = self.densepose_losses(
-                    gt_instances, densepose_outputs, gt_bitmasks
-                )
-                losses.update(densepose_loss_dict)
+                    # pdb.set_trace()
+                    
+                    _, gt_instances = self.densepose_data_filter(None, gt_instances)
+                    # if len(gt_instances)!=len(proposals):
+                    #     pdb.set_trace()
+                    densepose_loss_dict = self.densepose_losses(
+                        gt_instances, densepose_outputs, gt_bitmasks
+                    )
+                    losses.update(densepose_loss_dict)
 
             return losses
 
         else:
-            if len(pred_instances) > 0:
-                s_logits = self.mask_heads_forward_with_coords(
-                    mask_feats, mask_feat_stride, pred_instances
+            if len(pred_instances)>0 and iuv_head_func is not None:
+                s_logits, relative_coords = self.mask_heads_forward_with_coords(
+                    mask_feats, mask_feat_stride, pred_instances, norm_coord_boxHW=self.norm_coord_boxHW
                 )
 
                 # if self.n_segm_chan==1:
@@ -400,18 +557,43 @@ class DynamicMaskHead(nn.Module):
                 else:
                     raise NotImplementedError
 
-                if mask_out_bg_feats is not "none":
-                    N = iuv_feats.shape[0]
+                ## create_rel_coord_gt if needed
+                # N, _, H, W = s_logits.shape[-2:]
+                N, _, H, W = fpn_features[list(fpn_features.keys())[0]].shape
+
+                N_ins = mask_feats.shape[0]
+                # if self.use_gt_ins:
+                #     rel_coord = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device)
+                # else:
+
+                rel_coord = torch.zeros([N,2,H,W], device=mask_feats.device).float()
+                im_inds = pred_instances.im_inds
+                for idx in range(N_ins):
+                    if idx in im_inds:
+                        cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+                        ss = s_logits[im_inds==idx,-1:]
+                        coord = torch.mean(cc*ss, dim=0, keepdim=True) 
+                        rel_coord[idx:idx+1] = coord #.reshape(1, 2, H, W)
+
+
+                if mask_out_bg_feats == "none":
+                    fg_mask = torch.ones([N,1,H,W], device=iuv_feats.device)
+                else:
+                    # N = iuv_feats.shape[0]
                     fg_mask = s_logits[:,-1:].detach()
                     fg_mask_list = []
-                    for i in range(N):
+                    for i in range(N_ins):
                         fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
                     fg_mask = torch.cat(fg_mask_list, dim=0).detach()
                     if mask_out_bg_feats=="hard":
                         fg_mask = (fg_mask>0.1).float()
-                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, pred_instances)
-                else:
-                    iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, pred_instances)
+                    fg_mask = F.interpolate(fg_mask, (H,W))
+                if self.dilate_ks>0:
+                    fg_mask = self._torch_dilate(fg_mask, kernel_size=self.dilate_ks)
+                # fg_mask = self._torch_dilate(fg_mask, kernel_size=3)
+                #     iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances)
+                # else:
+                iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances)
                 
                 # iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
 

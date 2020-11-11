@@ -99,17 +99,18 @@ class MaskBranch(nn.Module):
         conv_block = conv_with_kaiming_uniform(norm, activation=True)
 
 
-        self.use_decoder           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ON
-        if self.use_decoder:
-            self.decoder = Decoder(cfg, input_shape, self.in_features)
-            assert agg_channels==cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_CONV_DIMS
-        else:
-            self.refine = nn.ModuleList()
-            for in_feature in self.in_features:
-                self.refine.append(conv_block(
-                    feature_channels[in_feature],
-                    agg_channels, 3, 1
-                ))
+        self.use_decoder = False
+        # self.use_decoder           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ON
+        # if self.use_decoder:
+        #     self.decoder = Decoder(cfg, input_shape, self.in_features)
+        #     assert agg_channels==cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_CONV_DIMS
+        # else:
+        self.refine = nn.ModuleList()
+        for in_feature in self.in_features:
+            self.refine.append(conv_block(
+                feature_channels[in_feature],
+                agg_channels, 3, 1
+            ))
 
         tower = [conv_block(
                 agg_channels, channels, 3, 1
@@ -145,6 +146,7 @@ class MaskBranch(nn.Module):
 
         if self.use_decoder:
             features = [features[f] for f in self.in_features]
+            # pdb.set_trace()
             x = self.decoder(features)
         else:
             for i, f in enumerate(self.in_features):

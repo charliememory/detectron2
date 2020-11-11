@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 from dataclasses import dataclass
-from typing import Union
+from typing import Union, Optional
 import torch
 
 
@@ -23,11 +23,19 @@ class DensePoseChartPredictorOutput:
          24 fine body parts / background)
      - Hout and Wout are height and width of predictions
     """
+    # def __init__(self, 
+    #              coarse_segm: torch.Tensor, 
+    #              fine_segm: torch.Tensor,
+    #              u: torch.Tensor,
+    #              v: torch.Tensor,
+    #              aux_supervision: Optional[torch.Tensor]=None):
 
     coarse_segm: torch.Tensor
     fine_segm: torch.Tensor
     u: torch.Tensor
     v: torch.Tensor
+    aux_supervision: Optional[torch.Tensor] = None
+    stride: Optional[int] = None
 
     def __len__(self):
         """
@@ -44,17 +52,37 @@ class DensePoseChartPredictorOutput:
         Args:
             item (int or slice or tensor): selected items
         """
-        if isinstance(item, int):
-            return DensePoseChartPredictorOutput(
-                coarse_segm=self.coarse_segm[item].unsqueeze(0),
-                fine_segm=self.fine_segm[item].unsqueeze(0),
-                u=self.u[item].unsqueeze(0),
-                v=self.v[item].unsqueeze(0),
-            )
+        if self.aux_supervision is None:
+            if isinstance(item, int):
+                return DensePoseChartPredictorOutput(
+                    coarse_segm=self.coarse_segm[item].unsqueeze(0),
+                    fine_segm=self.fine_segm[item].unsqueeze(0),
+                    u=self.u[item].unsqueeze(0),
+                    v=self.v[item].unsqueeze(0),
+                )
+            else:
+                return DensePoseChartPredictorOutput(
+                    coarse_segm=self.coarse_segm[item],
+                    fine_segm=self.fine_segm[item],
+                    u=self.u[item],
+                    v=self.v[item],
+                )
         else:
-            return DensePoseChartPredictorOutput(
-                coarse_segm=self.coarse_segm[item],
-                fine_segm=self.fine_segm[item],
-                u=self.u[item],
-                v=self.v[item],
-            )
+            if isinstance(item, int):
+                return DensePoseChartPredictorOutput(
+                    coarse_segm=self.coarse_segm[item].unsqueeze(0),
+                    fine_segm=self.fine_segm[item].unsqueeze(0),
+                    u=self.u[item].unsqueeze(0),
+                    v=self.v[item].unsqueeze(0),
+                    aux_supervision=self.aux_supervision[item].unsqueeze(0),
+                    stride=self.stride[item].unsqueeze(0),
+                )
+            else:
+                return DensePoseChartPredictorOutput(
+                    coarse_segm=self.coarse_segm[item],
+                    fine_segm=self.fine_segm[item],
+                    u=self.u[item],
+                    v=self.v[item],
+                    aux_supervision=self.aux_supervision[item],
+                    stride=self.stride[item],
+                )

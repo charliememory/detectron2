@@ -233,6 +233,7 @@ _C.MODEL.CONDINST.IUVHead.OUT_CHANNELS = 25*3
 _C.MODEL.CONDINST.IUVHead.CHANNELS = 128
 _C.MODEL.CONDINST.IUVHead.NORM = "GN" #"BN"
 _C.MODEL.CONDINST.IUVHead.NUM_CONVS = 3
+_C.MODEL.CONDINST.IUVHead.GT_INSTANCES = False # Use gt instances labels to create relative coords
 _C.MODEL.CONDINST.IUVHead.REL_COORDS = False # Use relative coords (2-channels) as input
 _C.MODEL.CONDINST.IUVHead.ABS_COORDS = False # Use absolute coords (2-channels) as input
 _C.MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER = 0
@@ -242,6 +243,13 @@ _C.MODEL.CONDINST.IUVHead.USE_MASK_FEATURES = False
 _C.MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES = "none" # none | soft | hard
 _C.MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R = 23 # the receptive field for relative positional encoding (23 x 23)
 _C.MODEL.CONDINST.IUVHead.NUM_DCN_LAYER = 0
+_C.MODEL.CONDINST.IUVHead.DOWN_UP_SAMPLING = False
+_C.MODEL.CONDINST.IUVHead.NORM_COORD_BOXHW = False  
+_C.MODEL.CONDINST.IUVHead.PARTIAL_CONV = False
+_C.MODEL.CONDINST.IUVHead.PARTIAL_NORM = False
+_C.MODEL.CONDINST.IUVHead.DISABLE = False
+_C.MODEL.CONDINST.IUVHead.NAME = "IUVHead"
+_C.MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE = 0
 
 # ---------------------------------------------------------------------------- #
 # TOP Module Options

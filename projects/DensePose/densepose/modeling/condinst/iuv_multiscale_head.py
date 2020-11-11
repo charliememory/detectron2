@@ -114,63 +114,82 @@ class CoordGlobalIUVMultiscaleHead(nn.Module):
 
         # self.densepose_losses = build_densepose_losses(cfg)
 
-    def forward(self, s_logits, iuv_feats, iuv_feat_stride, instances):
+    # def forward(self, s_logits, iuv_feats, iuv_feat_stride, relative_coords, instances):
 
 
+    #     N, _, H, W = iuv_feats.size()
+    #     rel_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
+    #     abs_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
+
+    #     if self.use_rel_coords: 
+    #         # locations = compute_locations(
+    #         #     iuv_feats.size(2), iuv_feats.size(3),
+    #         #     stride=iuv_feat_stride, device=iuv_feats.device
+    #         # )
+    #         # # n_inst = len(instances)
+
+    #         im_inds = instances.im_inds
+
+
+    #         # instance_locations = instances.locations
+    #         # relative_coords = instance_locations.reshape(-1, 1, 2) - locations.reshape(1, -1, 2)
+    #         # relative_coords = relative_coords.permute(0, 2, 1).float()
+    #         # soi = self.sizes_of_interest.float()[instances.fpn_levels]
+    #         # relative_coords = relative_coords / soi.reshape(-1, 1, 1)
+    #         # relative_coords = relative_coords.to(dtype=iuv_feats.dtype)
+    #         # rel_coord_list = []
+    #         for idx in range(N):
+    #             if idx in im_inds:
+    #                 cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+    #                 # assert s_logits.shape[1]==1
+    #                 ss = s_logits[im_inds==idx,-1:]
+    #                 # coord = torch.sum(cc*ss, dim=0, keepdim=True) \
+    #                 #       / (torch.sum(ss, dim=0, keepdim=True)+1e-7)
+    #                 coord = torch.mean(cc*ss, dim=0, keepdim=True) 
+    #                 rel_coord[idx:idx+1] = coord #.reshape(1, 2, H, W)
+    #                 # pdb.set_trace()
+    #                 # import imageio
+    #                 # imageio.imwrite("tmp/cc.png",cc[0,0].detach().cpu().numpy())
+    #                 # imageio.imwrite("tmp/ss.png",ss[0,0].detach().cpu().numpy())
+    #                 # imageio.imwrite("tmp/cc_ss.png",(cc*ss)[0,0].detach().cpu().numpy())
+    #                 # imageio.imwrite("tmp/ss_sum.png",torch.sum(ss, dim=0, keepdim=True)[0,0].detach().cpu().numpy())
+    #                 # imageio.imwrite("tmp/coord_mean.png",coord[0,0].detach().cpu().numpy())
+    #             # rel_coord_list.append(rel_coord)
+    #         # assert self.norm_feat
+    #         if self.norm_feat:
+    #             # iuv_feats = iuv_feats/iuv_feats.max()*2.0 - 1.0
+    #             iuv_feats = iuv_feats/20.0
+
+    #         if self.use_pos_emb:
+    #             rel_coord = self.position_embedder(rel_coord)
+
+
+    #     iuv_head_inputs = torch.cat([rel_coord, iuv_feats], dim=1) 
+    #     # else:
+    #     #     iuv_head_inputs = iuv_feats
+
+    #     if self.use_abs_coords: 
+    #         abs_coord = compute_grid(H, W, device=iuv_feats.device)
+    #         iuv_head_inputs = torch.cat([abs_coord, iuv_head_inputs], dim=1) 
+
+
+    def forward(self, s_logits, iuv_feats, iuv_feat_stride, rel_coord, instances):
         N, _, H, W = iuv_feats.size()
-        rel_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
-        abs_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
 
         if self.use_rel_coords: 
-            locations = compute_locations(
-                iuv_feats.size(2), iuv_feats.size(3),
-                stride=iuv_feat_stride, device=iuv_feats.device
-            )
-            # n_inst = len(instances)
-
-            im_inds = instances.im_inds
-
-
-            instance_locations = instances.locations
-            relative_coords = instance_locations.reshape(-1, 1, 2) - locations.reshape(1, -1, 2)
-            relative_coords = relative_coords.permute(0, 2, 1).float()
-            soi = self.sizes_of_interest.float()[instances.fpn_levels]
-            relative_coords = relative_coords / soi.reshape(-1, 1, 1)
-            relative_coords = relative_coords.to(dtype=iuv_feats.dtype)
-            # rel_coord_list = []
-            for idx in range(N):
-                if idx in im_inds:
-                    cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
-                    # assert s_logits.shape[1]==1
-                    ss = s_logits[im_inds==idx,-1:]
-                    # coord = torch.sum(cc*ss, dim=0, keepdim=True) \
-                    #       / (torch.sum(ss, dim=0, keepdim=True)+1e-7)
-                    coord = torch.mean(cc*ss, dim=0, keepdim=True) 
-                    rel_coord[idx:idx+1] = coord #.reshape(1, 2, H, W)
-                    # pdb.set_trace()
-                    # import imageio
-                    # imageio.imwrite("tmp/cc.png",cc[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/ss.png",ss[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/cc_ss.png",(cc*ss)[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/ss_sum.png",torch.sum(ss, dim=0, keepdim=True)[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/coord_mean.png",coord[0,0].detach().cpu().numpy())
-                # rel_coord_list.append(rel_coord)
-            # assert self.norm_feat
-            if self.norm_feat:
-                # iuv_feats = iuv_feats/iuv_feats.max()*2.0 - 1.0
-                iuv_feats = iuv_feats/20.0
-
             if self.use_pos_emb:
                 rel_coord = self.position_embedder(rel_coord)
-
-
+        else:
+            rel_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
         iuv_head_inputs = torch.cat([rel_coord, iuv_feats], dim=1) 
-        # else:
-        #     iuv_head_inputs = iuv_feats
 
         if self.use_abs_coords: 
-            abs_coord = compute_grid(H, W, device=iuv_feats.device)
-            iuv_head_inputs = torch.cat([abs_coord, iuv_head_inputs], dim=1) 
+            abs_coord = compute_grid(H, W, device=iuv_feats.device)[None,...].repeat(N,1,1,1)
+            if self.use_pos_emb:
+                abs_coord = self.position_embedder(abs_coord)
+        else:
+            abs_coord = torch.zeros([N,2,H,W], device=iuv_feats.device).to(dtype=iuv_feats.dtype)
+        iuv_head_inputs = torch.cat([abs_coord, iuv_head_inputs], dim=1)
 
         iuv_logit_mid_res = self.tower(iuv_head_inputs)
         iuv_logit_mid_res = self.mid_res_conv(iuv_logit_mid_res)

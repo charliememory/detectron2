@@ -38,11 +38,32 @@ source ~/.bashrc_liqianma
 #     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "soft" \
 
 
-cfg_name='densepose_CondInst_R_101_s1x'
+# cfg_name='densepose_CondInst_R_101_s1x'
+# cfg_name='densepose_CondInst_R_50_BiFPN_s1x'
+# CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
+#     --resume \
+#     SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 \
+#     OUTPUT_DIR ./output/${cfg_name}_1chSeg_cropResizeNew_deepWide2IUVHead_lambda51_AbsRelCoordPE10 \
+#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+#     SOLVER.CHECKPOINT_PERIOD 5000 \
+#     DATALOADER.NUM_WORKERS 2 \
+#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSCropResizeLoss" \
+#     MODEL.CONDINST.IUVHead.NUM_CONVS 7 \
+#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256\
+#     MODEL.CONDINST.IUVHead.CHANNELS 256 \
+#     MODEL.CONDINST.IUVHead.ABS_COORDS True \
+#     MODEL.CONDINST.IUVHead.REL_COORDS True \
+#     MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS 10 \
+#     MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER 1 \
+#     MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R 51 \
+#     # MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseMultilayermaskHead" \
+
+cfg_name='densepose_CondInst_R_50_BiFPN_s1x'
 CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
     --resume \
     SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 \
-    OUTPUT_DIR ./output/${cfg_name}_1chSeg_cropResizeNew_deepWide2IUVHead_lambda31_AbsRelCoordPE10 \
+    OUTPUT_DIR ./output/${cfg_name}_1chSeg_cropResizeNew_deepWide2IUVHead_lambda1_AbsRelCoordPE10_GTins \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
     SOLVER.CHECKPOINT_PERIOD 5000 \
@@ -53,8 +74,12 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.IUVHead.CHANNELS 256 \
     MODEL.CONDINST.IUVHead.ABS_COORDS True \
     MODEL.CONDINST.IUVHead.REL_COORDS True \
+    MODEL.CONDINST.IUVHead.GT_INSTANCES True \
     MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS 10 \
     MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER 1 \
-    MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R 31 \
+    # MODEL.CONDINST.IUVHead.DOWN_UP_SAMPLING True \
+    # MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R 51 \
     # MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseMultilayermaskHead" \
+
+
 

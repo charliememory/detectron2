@@ -5,16 +5,16 @@ MODEL:
   BACKBONE:
     NAME: "build_fcos_resnet_fpn_backbone"
   RESNETS:
-    OUT_FEATURES: ["res3", "res4", "res5"]
+    OUT_FEATURES: ["res2", "res3", "res4", "res5"]
   FPN:
-    IN_FEATURES: ["res3", "res4", "res5"]
+    IN_FEATURES: ["res2", "res3", "res4", "res5"]
   PROPOSAL_GENERATOR:
     NAME: "FCOS"
   FCOS:
     THRESH_WITH_CTR: True
     USE_SCALE: True
   CONDINST:
-    MAX_PROPOSALS: 300
+    MAX_PROPOSALS: 600
 
 
   # ANCHOR_GENERATOR:
@@ -31,10 +31,13 @@ MODEL:
   #   POST_NMS_TOPK_TEST: 1000
 
   DENSEPOSE_ON: True
-  # ROI_HEADS:
-  #   NAME: "DensePoseROIHeads"
-  #   IN_FEATURES: ["p2", "p3", "p4", "p5"]
-  #   NUM_CLASSES: 1
+  ROI_DENSEPOSE_HEAD:
+    DECODER_ON: False
+    POOLER_TYPE: "ROIAlign"
+  ROI_HEADS:
+    # NAME: "DensePoseROIHeads"
+    IN_FEATURES: ["p2", "p3", "p4", "p5"]
+    NUM_CLASSES: 1
   NUM_CLASSES: 1
   # ROI_BOX_HEAD:
   #   NAME: "FastRCNNConvFCHead"

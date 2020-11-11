@@ -10,7 +10,7 @@ from .converters import builtin as builtin_converters  # register converters
 #     load_bootstrap_config,
 # )
 from .evaluator import DensePoseCOCOEvaluator
-from .modeling.roi_heads import DensePoseROIHeads
+from .modeling.roi_heads import DensePoseROIHeads, DensePoseROIGlobalHeads
 from .data.structures import DensePoseDataRelative, DensePoseList, DensePoseTransformData
 from .modeling.test_time_augmentation import (
     DensePoseGeneralizedRCNNWithTTA,

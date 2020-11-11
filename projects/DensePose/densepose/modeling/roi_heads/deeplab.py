@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 import fvcore.nn.weight_init as weight_init
-import torch
+import torch, pdb
 from torch import nn
 from torch.nn import functional as F
 
@@ -60,6 +60,7 @@ class DensePoseDeepLabHead(nn.Module):
     def forward(self, features):
         x0 = features
         x = self.ASPP(x0)
+        # print(x0.shape, x.shape)
         if self.use_nonlocal:
             x = self.NLBlock(x)
         output = x
@@ -68,6 +69,8 @@ class DensePoseDeepLabHead(nn.Module):
             x = getattr(self, layer_name)(x)
             x = F.relu(x)
             output = x
+        # print(x.shape)
+        # pdb.set_trace()
         return output
 
     def _get_layer_name(self, i: int):
@@ -126,7 +129,7 @@ class ASPP(nn.Module):
         self.convs = nn.ModuleList(modules)
 
         self.project = nn.Sequential(
-            nn.Conv2d(5 * out_channels, out_channels, 1, bias=False),
+            nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
             # nn.BatchNorm2d(out_channels),
             nn.ReLU()
             # nn.Dropout(0.5)

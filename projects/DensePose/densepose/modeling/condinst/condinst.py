@@ -13,6 +13,7 @@ from detectron2.modeling.backbone import build_backbone
 from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 from detectron2.structures.instances import Instances
 from detectron2.structures.masks import PolygonMasks, polygons_to_bitmask
+from detectron2.modeling.roi_heads import select_foreground_proposals
 
 from .dynamic_mask_head import build_dynamic_mask_head
 from .mask_branch import build_mask_branch
@@ -22,6 +23,11 @@ from .iuv_unet_head import build_iuv_unet_head
 from .iuv_multiscale_head import build_iuv_multiscale_head
 from .iuv_multilayermask_head import build_iuv_multilayermask_head
 from .iuv_multilayercoord_head import build_iuv_multilayercoord_head
+from .iuv_scaleattn_head import build_iuv_scaleattn_head
+from .iuv_cropresize_head import build_iuv_cropresize_head
+from .iuv_pooler_head import build_iuv_pooler_head
+from .iuv_pooler2_head import build_iuv_pooler2_head
+from .iuv_sparsepooler2_head import build_iuv_sparsepooler2_head
 
 # from adet.utils.comm import aligned_bilinear
 from densepose.utils.comm import aligned_bilinear
@@ -55,18 +61,32 @@ class CondInst(nn.Module):
         self.mask_head = build_dynamic_mask_head(cfg)
         self.mask_branch = build_mask_branch(cfg, self.backbone.output_shape())
         ##
-        if cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseDeepLabHead":
+        if cfg.MODEL.CONDINST.IUVHead.NAME=="IUVDeepLabHead":
             self.iuv_head = build_iuv_deeplab_head(cfg)
-        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseUnetHead":
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVUnetHead":
             self.iuv_head = build_iuv_unet_head(cfg)
-        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultiscaleHead":
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVMultiscaleHead":
             self.iuv_head = build_iuv_multiscale_head(cfg)
-        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultilayermaskHead":
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVMultilayermaskHead":
             self.iuv_head = build_iuv_multilayermask_head(cfg)
-        elif cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME=="DensePoseMultilayercoordHead":
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVMultilayercoordHead":
             self.iuv_head = build_iuv_multilayercoord_head(cfg)
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVScaleAttnHead":
+            self.iuv_head = build_iuv_scaleattn_head(cfg)
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVCropResizeHead":
+            self.iuv_head = build_iuv_cropresize_head(cfg, self.backbone.output_shape())
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVPoolerHead":
+            self.iuv_head = build_iuv_pooler_head(cfg, self.backbone.output_shape())
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVPooler2Head":
+            self.iuv_head = build_iuv_pooler2_head(cfg, self.backbone.output_shape())
+        elif cfg.MODEL.CONDINST.IUVHead.NAME=="IUVSparsePooler2Head":
+            self.iuv_head = build_iuv_sparsepooler2_head(cfg, self.backbone.output_shape())
+        elif cfg.MODEL.CONDINST.IUVHead.DISABLE==True:
+            self.iuv_head = None
         else:
             self.iuv_head = build_iuv_head(cfg)
+
+
         self.iuv_fea_dim = cfg.MODEL.CONDINST.IUVHead.CHANNELS
         self.s_ins_fea_dim = cfg.MODEL.CONDINST.MASK_HEAD.CHANNELS
         self.use_mask_feats_iuvhead = cfg.MODEL.CONDINST.IUVHead.USE_MASK_FEATURES
@@ -93,7 +113,13 @@ class CondInst(nn.Module):
 
         self._init_densepose_head(cfg)
 
+        # from detectron2.modeling.proposal_generator import build_proposal_generator
+        # from detectron2.modeling.roi_heads import build_roi_heads
+        # self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
+        # self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
+
         self.to(self.device)
+
 
     def _init_densepose_head(self, cfg):
         # fmt: off
@@ -101,15 +127,23 @@ class CondInst(nn.Module):
         if not self.densepose_on:
             return
         self.densepose_data_filter = build_densepose_data_filter(cfg)
+
+
+        # ## original ROI based densepose head
+        # from detectron2.modeling.poolers import ROIPooler
+        # from ..roi_heads.roi_head import Decoder
+        # input_shape = self.backbone.output_shape()
+        # self.in_features  = cfg.MODEL.ROI_HEADS.IN_FEATURES
         # dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_RESOLUTION
         # dp_pooler_sampling_ratio   = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_SAMPLING_RATIO
         # dp_pooler_type             = cfg.MODEL.ROI_DENSEPOSE_HEAD.POOLER_TYPE
         # self.use_decoder           = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ON
-        # fmt: on
+        # # fmt: on
         # if self.use_decoder:
         #     dp_pooler_scales = (1.0 / input_shape[self.in_features[0]].stride,)
         # else:
         #     dp_pooler_scales = tuple(1.0 / input_shape[k].stride for k in self.in_features)
+        # # pdb.set_trace()
         # in_channels = [input_shape[f].channels for f in self.in_features][0]
 
         # if self.use_decoder:
@@ -121,7 +155,8 @@ class CondInst(nn.Module):
         #     sampling_ratio=dp_pooler_sampling_ratio,
         #     pooler_type=dp_pooler_type,
         # )
-        # self.densepose_head = build_densepose_head(cfg, in_channels)
+        # self.densepose_head = build_densepose_head(cfg, self.iuv_fea_dim)
+        # # self.densepose_head = build_densepose_head(cfg, in_channels)
         # self.densepose_predictor = build_densepose_predictor(
         #     cfg, self.densepose_head.n_out_channels
         # )
@@ -160,8 +195,11 @@ class CondInst(nn.Module):
             images, features, gt_instances, self.controller
         )
 
+
+
+
         if self.training:
-            densepose_loss_dict = self._forward_mask_heads_train(proposals, s_ins_feats, iuv_feats, gt_instances=gt_instances)
+            densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances)
 
             # # instances = 
             # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
@@ -171,6 +209,35 @@ class CondInst(nn.Module):
             losses.update(proposal_losses)
             # losses.update({"loss_mask": loss_mask})
             losses.update(densepose_loss_dict)
+
+            # ## original ROI based densepose head
+            # # proposals = proposals['instances']
+            # if self.iuv_head is None:
+
+            #     # proposals, _ = select_foreground_proposals(gt_instances, bg_label=1)
+            #     if len(gt_instances) > 0:
+            #         # pdb.set_trace()
+            #         # proposals = proposals['instances']
+            #         for ii in range(len(proposals)):
+            #             # pdb.set_trace()
+            #             gt_instances[ii].proposal_boxes=gt_instances[ii].gt_boxes
+
+            #         proposal_boxes = [x.proposal_boxes for x in gt_instances]
+
+            #         features = [features[f] for f in self.in_features]
+            #         if self.use_decoder:
+            #             features = [self.decoder(features)]
+            #         # features = [iuv_feats]
+
+            #         features_dp = self.densepose_pooler(features, proposal_boxes)
+            #         densepose_head_outputs = self.densepose_head(features_dp)
+            #         densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+            #         densepose_loss_dict = self.densepose_losses(gt_instances, densepose_predictor_outputs)
+            #         # losses["loss_densepose_S_insBranch"] = losses["loss_densepose_S"]
+            #         del densepose_loss_dict["loss_densepose_S"]
+            #         del losses["loss_densepose_S"]
+            #         losses.update(densepose_loss_dict)
+            #         # losses = densepose_loss_dict
 
             # print(losses)
             # for k,v in losses.items():
@@ -183,7 +250,7 @@ class CondInst(nn.Module):
             # "TODO add densepose inference"
             assert len(batched_inputs)==1
             imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, s_ins_feats, iuv_feats, imgsize=imgsize)
+            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
             # pdb.set_trace()
             # import imageio
             # im = batched_inputs[0]["image"]/255.
@@ -211,6 +278,27 @@ class CondInst(nn.Module):
             # imageio.imwrite('tmp/im_ins.png', im)
             # pdb.set_trace()
 
+            # ## original ROI based densepose head
+            # if self.iuv_head is None:
+            #     instances = densepose_instances[0]['instances']
+            #     pred_boxes = [x.pred_boxes for x in instances]
+
+            #     features = [features[f] for f in self.in_features]
+            #     if self.use_decoder:
+            #         features = [self.decoder(features)]
+            #     # features = [iuv_feats]
+
+            #     features_dp = self.densepose_pooler(features, pred_boxes)
+            #     if len(features_dp) > 0:
+            #         densepose_head_outputs = self.densepose_head(features_dp)
+            #         densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+            #     else:
+            #         densepose_predictor_outputs = None
+
+            #     densepose_inference(densepose_predictor_outputs, instances)
+
+            #     densepose_instances, _ = self.roi_heads(images, features, proposals, None)
+
 
             return densepose_instances
 
@@ -233,7 +321,7 @@ class CondInst(nn.Module):
 
             # return processed_results
 
-    def _forward_mask_heads_train(self, proposals, mask_feats, iuv_feats, gt_instances: List[Instances]):
+    def _forward_mask_heads_train(self, proposals, fpn_features, mask_feats, iuv_feats, gt_instances: List[Instances]):
         # prepare the inputs for mask heads
         pred_instances = proposals["instances"]
         # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride, pred_instances)
@@ -251,14 +339,15 @@ class CondInst(nn.Module):
         #     mask_feats, iuv_logits, self.mask_branch.out_stride,
         #     pred_instances, gt_instances
         # )
-        loss_mask = self.mask_head(self.iuv_head, iuv_feats,
-            mask_feats, self.mask_branch.out_stride,
-            pred_instances, gt_instances=gt_instances, mask_out_bg_feats=self.mask_out_bg_feats
+        loss_mask = self.mask_head(self.iuv_head, 
+            fpn_features, mask_feats, iuv_feats, 
+            self.mask_branch.out_stride, pred_instances, gt_instances=gt_instances, 
+            mask_out_bg_feats=self.mask_out_bg_feats
         )
 
         return loss_mask
 
-    def _forward_mask_heads_test(self, proposals, mask_feats, iuv_feats, imgsize):
+    def _forward_mask_heads_test(self, proposals, fpn_features, features, mask_feats, iuv_feats, imgsize):
         # prepare the inputs for mask heads
         for im_id, per_im in enumerate(proposals):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
@@ -269,9 +358,10 @@ class CondInst(nn.Module):
         #     mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances
         # )
 
-        densepose_instances, densepose_outputs = self.mask_head(self.iuv_head, iuv_feats,
-            mask_feats, self.mask_branch.out_stride, 
-            pred_instances, mask_out_bg_feats=self.mask_out_bg_feats
+        densepose_instances, densepose_outputs = self.mask_head(self.iuv_head, 
+            fpn_features, mask_feats, iuv_feats, 
+            self.mask_branch.out_stride, pred_instances, 
+            mask_out_bg_feats=self.mask_out_bg_feats
         )
 
         # im_inds = densepose_instances.get('im_inds')

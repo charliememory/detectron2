@@ -1,13 +1,14 @@
 from torch import nn
 
 from detectron2.layers import Conv2d
+from .partialconv2d import PartialConv2d
 from .deform_conv import DFConv2d
 from detectron2.layers.batch_norm import get_norm
 
 
 def conv_with_kaiming_uniform(
         norm=None, activation=None,
-        use_deformable=False, use_sep=False, use_deconv=False):
+        use_deformable=False, use_sep=False, use_deconv=False, use_partial_conv=False):
     def make_conv(
         in_channels, out_channels, kernel_size, stride=1, dilation=1
     ):
@@ -15,6 +16,8 @@ def conv_with_kaiming_uniform(
             conv_func = DFConv2d
         elif use_deconv:
             conv_func = nn.ConvTranspose2d
+        elif use_partial_conv:
+            conv_func = PartialConv2d
         else:
             conv_func = Conv2d
         if use_sep:
