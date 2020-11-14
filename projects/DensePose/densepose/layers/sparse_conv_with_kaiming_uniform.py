@@ -5,6 +5,7 @@ from .partialconv2d import PartialConv2d
 from .deform_conv import DFConv2d
 from detectron2.layers.batch_norm import get_norm
 import spconv
+import pdb
 # from spconv import ops, SparseConvTensor
 
 
@@ -34,6 +35,20 @@ import spconv
 #                  use_hash=False,
 #                  algo=ops.ConvAlgo.Native):
 
+# class SparseGN(nn.Module):
+#     def __init__(self, num_groups, out_channels):
+#         super(SparseGN, self).__init__()
+#         self.gn = nn.GroupNorm(num_groups, out_channels)
+
+#     def forward(self, x: spconv.SparseConvTensor):
+#         pdb.set_trace()
+#         N, C = x.features.shape
+#         batch_indices = x.indices[:,:1].expand_as(x.features)
+#         out_batch = []
+#         for i in range(x.batch_size):
+#             out = self.gn(x[batch_indices==i].reshape([1,C,-1]))
+#             out_batch.append(out.reshape([-1,C]))
+#         return torch.cat(out_batch, dim=0)
 
 
 # class ConvAlgo(Enum):
@@ -100,8 +115,12 @@ def sparse_conv_with_kaiming_uniform(
         module = [conv,]
         if norm is not None and len(norm) > 0:
             if norm == "GN":
-                # raise NotImplementedError
+                raise NotImplementedError
+                print("GN")
                 norm_module = nn.GroupNorm(32, out_channels)
+            # elif norm == "SparseGN":
+            #     # raise NotImplementedError
+            #     norm_module = SparseGN(32, out_channels) 
             elif norm == "BN":
                 norm_module = nn.BatchNorm1d(out_channels)
             else:

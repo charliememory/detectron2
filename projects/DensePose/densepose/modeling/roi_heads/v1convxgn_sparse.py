@@ -11,7 +11,7 @@ import spconv
 
 from ..utils import initialize_module_params
 from .registry import ROI_DENSEPOSE_HEAD_REGISTRY
-
+import pdb
 
 @ROI_DENSEPOSE_HEAD_REGISTRY.register()
 class DensePoseV1ConvXGNSparseHead(nn.Module):
@@ -64,12 +64,12 @@ class DensePoseV1ConvXGNSparseHead(nn.Module):
             A tensor of DensePose head outputs
         """
         x = features
-        output = x
+        # output = x
         for i in range(self.n_stacked_convs):
             layer_name = self._get_layer_name(i)
             x = getattr(self, layer_name)(x)
             # x = F.relu(x)
-            output = x
+        output = x
         return output
 
     def _get_layer_name(self, i: int):

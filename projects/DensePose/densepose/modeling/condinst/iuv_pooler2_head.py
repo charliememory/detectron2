@@ -120,7 +120,7 @@ class Decoder(nn.Module):
         initialize_module_params(self.predictor)
         # weight_init.c2_msra_fill(self.predictor)
 
-    def forward(self, features: List[torch.Tensor], rel_coord: Any, abs_coord: Any, fg_mask: Any):
+    def forward(self, features: List[torch.Tensor], iuv_feats: torch.Tensor, rel_coord: Any, abs_coord: Any, fg_mask: Any, ins_mask_list=None):
         for i, _ in enumerate(self.in_features):
             if i == 0:
                 x = self.scale_heads[i](features[i])
@@ -178,7 +178,7 @@ class CoordGlobalIUVPooler2Head(nn.Module):
         # )
         self.densepose_losses = build_densepose_losses(cfg)
 
-    def forward(self, fpn_features, s_logits, iuv_feats, iuv_feat_stride, rel_coord, instances, fg_mask, gt_instances=None):
+    def forward(self, fpn_features, s_logits, iuv_feats, iuv_feat_stride, rel_coord, instances, fg_mask, gt_instances=None, ins_mask_list=None):
         # assert not self.use_abs_coords
 
         fea0 = fpn_features[self.in_features[0]]
@@ -189,7 +189,6 @@ class CoordGlobalIUVPooler2Head(nn.Module):
                 rel_coord = self.position_embedder(rel_coord)
         else:
             rel_coord = None
-        # iuv_head_inputs = torch.cat([rel_coord, iuv_feats], dim=1) 
 
         if self.use_abs_coords: 
             abs_coord = compute_grid(H, W, device=fea0.device)[None,...].repeat(N,1,1,1)
@@ -197,24 +196,31 @@ class CoordGlobalIUVPooler2Head(nn.Module):
                 abs_coord = self.position_embedder(abs_coord)
         else:
             abs_coord = None
-        # iuv_head_inputs = torch.cat([abs_coord, iuv_head_inputs], dim=1)
 
-        # features = iuv_head_inputs
-        # assert self.use_decoder
-        # if self.use_decoder:
         features = [fpn_features[f] for f in self.in_features]
-        # print(features[0].shape, fg_mask.mean())
-        # pdb.set_trace()
-        # features = features*fg_mask
-        features = [self.decoder(features, rel_coord, abs_coord, fg_mask)]
 
         if self.training:
+            features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
             proposal_boxes = [x.gt_boxes for x in gt_instances]
+            features_dp = self.densepose_pooler(features, proposal_boxes)
+            iuv_logit = features_dp
+            iuv_logit_global = features[0]
         else:
-            proposal_boxes = [x.pred_boxes for x in instances]
+            features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
+            # if isinstance(instances,Instances):
+            proposal_boxes = [instances.pred_boxes]
+            # else:
+            #     proposal_boxes = [x.pred_boxes for x in instances]
+            features_dp = self.densepose_pooler(features, proposal_boxes)
+            # pdb.set_trace()
+            s_logit_list = []
+            for idx in range(s_logits.shape[0]):
+                s_logit = self.densepose_pooler([s_logits[idx:idx+1]], [proposal_boxes[0][idx:idx+1]])
+                s_logit_list.append(s_logit)
+            iuv_logit = torch.cat([torch.cat(s_logit_list,dim=0), features_dp], dim=1)
+            iuv_logit_global = features[0]
+            # print(instances.pred_boxes)
 
-        features_dp = self.densepose_pooler(features, proposal_boxes)
-        iuv_logit = features_dp
 
         return iuv_logit
 

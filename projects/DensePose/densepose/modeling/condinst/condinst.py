@@ -347,7 +347,7 @@ class CondInst(nn.Module):
 
         return loss_mask
 
-    def _forward_mask_heads_test(self, proposals, fpn_features, features, mask_feats, iuv_feats, imgsize):
+    def _forward_mask_heads_test(self, proposals, fpn_features, mask_feats, iuv_feats, imgsize):
         # prepare the inputs for mask heads
         for im_id, per_im in enumerate(proposals):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id

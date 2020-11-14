@@ -180,7 +180,7 @@ class CoordGlobalIUVHead(nn.Module):
 
         self.add_module('tower', nn.Sequential(*tower))
 
-    def forward(self, fpn_features, s_logits, iuv_feats, iuv_feat_stride, rel_coord, instances, fg_mask=None, gt_instances=None):
+    def forward(self, fpn_features, s_logits, iuv_feats, iuv_feat_stride, rel_coord, instances, fg_mask=None, gt_instances=None, ins_mask_list=None):
         N, _, H, W = iuv_feats.size()
 
         if self.use_rel_coords: 

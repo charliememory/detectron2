@@ -39,36 +39,6 @@ def build_iuv_sparsepooler2_head(cfg, input_shape):
     # return GlobalIUVHead(cfg)
     return CoordGlobalIUVSparsePooler2Head(cfg, input_shape=input_shape)
 
-class ExampleNet(nn.Module):
-    def __init__(self, shape):
-        super().__init__()
-        self.net = spconv.SparseSequential(
-            spconv.SparseConv3d(32, 64, 3), # just like nn.Conv3d but don't support group and all([d > 1, s > 1])
-            nn.BatchNorm1d(64), # non-spatial layers can be used directly in SparseSequential.
-            nn.ReLU(),
-            spconv.SubMConv3d(64, 64, 3, indice_key="subm0"),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            # when use submanifold convolutions, their indices can be shared to save indices generation time.
-            spconv.SubMConv3d(64, 64, 3, indice_key="subm0"),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            spconv.SparseConvTranspose3d(64, 64, 3, 2),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            spconv.ToDense(), # convert spconv tensor to dense and convert it to NCHW format.
-            nn.Conv3d(64, 64, 3),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-        )
-        self.shape = shape
-
-    def forward(self, features, coors, batch_size):
-        coors = coors.int() # unlike torch, this library only accept int coordinates.
-        x = spconv.SparseConvTensor(features, coors, self.shape, batch_size)
-        return self.net(x)# .dense()
-
-
 class DecoderSparse(nn.Module):
     """
     A semantic segmentation head described in detail in the Panoptic Feature Pyramid Networks paper
@@ -90,33 +60,36 @@ class DecoderSparse(nn.Module):
         norm                  = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_NORM
         num_lambda_layer = cfg.MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER
         lambda_layer_r = cfg.MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R
+        self.use_agg_feat    = cfg.MODEL.CONDINST.IUVHead.USE_AGG_FEATURES
+        self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
         # fmt: on
 
-        self.scale_heads = []
-        for in_feature in self.in_features:
-            head_ops = []
-            head_length = max(
-                1, int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride))
-            )
-            for k in range(head_length):
-                conv = Conv2d(
-                    feature_channels[in_feature] if k == 0 else conv_dims,
-                    conv_dims,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    bias=not norm,
-                    norm=get_norm(norm, conv_dims),
-                    activation=F.relu,
+        if not self.use_agg_feat:
+            self.scale_heads = []
+            for in_feature in self.in_features:
+                head_ops = []
+                head_length = max(
+                    1, int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride))
                 )
-                weight_init.c2_msra_fill(conv)
-                head_ops.append(conv)
-                if feature_strides[in_feature] != self.common_stride:
-                    head_ops.append(
-                        nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+                for k in range(head_length):
+                    conv = Conv2d(
+                        feature_channels[in_feature] if k == 0 else conv_dims,
+                        conv_dims,
+                        kernel_size=3,
+                        stride=1,
+                        padding=1,
+                        bias=not norm,
+                        norm=get_norm(norm, conv_dims),
+                        activation=F.relu,
                     )
-            self.scale_heads.append(nn.Sequential(*head_ops))
-            self.add_module(in_feature, self.scale_heads[-1])
+                    weight_init.c2_msra_fill(conv)
+                    head_ops.append(conv)
+                    if feature_strides[in_feature] != self.common_stride:
+                        head_ops.append(
+                            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+                        )
+                self.scale_heads.append(nn.Sequential(*head_ops))
+                self.add_module(in_feature, self.scale_heads[-1])
 
         # self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
         
@@ -151,13 +124,17 @@ class DecoderSparse(nn.Module):
         initialize_module_params(self.predictor)
         # weight_init.c2_msra_fill(self.predictor)
 
-    def forward(self, features: List[torch.Tensor], rel_coord: Any, abs_coord: Any, fg_mask: Any):
+    def forward(self, features: List[torch.Tensor], iuv_feats: torch.Tensor, rel_coord: torch.Tensor, 
+                abs_coord: torch.Tensor, fg_mask: torch.Tensor, ins_mask_list: List[torch.Tensor]):
         assert fg_mask.min()==0, "the fg_mask is all 1"
-        for i, _ in enumerate(self.in_features):
-            if i == 0:
-                x = self.scale_heads[i](features[i])
-            else:
-                x = x + self.scale_heads[i](features[i])
+        if not self.use_agg_feat:
+            for i, _ in enumerate(self.in_features):
+                if i == 0:
+                    x = self.scale_heads[i](features[i])
+                else:
+                    x = x + self.scale_heads[i](features[i])
+        else:
+            x = iuv_feats
         if rel_coord is not None:
             x = torch.cat([x,rel_coord], dim=1)
         if abs_coord is not None:
@@ -170,21 +147,42 @@ class DecoderSparse(nn.Module):
             else:
                 x = self.comb_pe_conv(x)
 
-
-
-        # pdb.set_trace()
-        ## dense to sparse
-        # x = spconv.SparseConvTensor.from_dense((x*fg_mask).permute([0,2,3,1])) # must be NHWC tensor
-
         ## dense to sparse
         N, C, H, W = x.shape
         coord = compute_grid(H, W, device=x.device, norm=False)
         sparse_coord_batch = []
         sparse_feat_batch = []
+        ins_indices_batch = []
+        ins_indices_len = []
+        ins_cnt = 0
         for n in range(N):
             m = fg_mask[n:n+1]
             x_indices = coord[0][m[0,0]>0]
             y_indices = coord[1][m[0,0]>0]
+            if self.use_ins_gn:
+                # pdb.set_trace()
+                # bg_and_ins = torch.cat([m[0],ins_mask_list[n].float()], dim=0)
+                # ins_indices = torch.argmax(bg_and_ins, dim=0)[m[0,0]>0] + ins_cnt
+                # try:
+                ins_indices = torch.argmax(ins_mask_list[n].float(), dim=0)[m[0,0]>0] + ins_cnt
+                ins_indices_batch.append(ins_indices)
+                ins_cnt += ins_mask_list[n].shape[0]
+
+                ins_indices_len.append(torch.sum(ins_mask_list[n],dim=[1,2]))
+                # except:
+                    # pdb.set_trace()
+
+                # import imageio
+                # masks = ins_mask_list[n]
+                # pdb.set_trace()
+                # for ii in range(masks.shape[0]):
+                #     imageio.imwrite('tmp/masks_{}.png'.format(ii), masks[ii].detach().cpu().numpy())
+                # tmp = torch.argmax(ins_mask_list[n].float(), dim=0).float() + 1
+                # imageio.imwrite('tmp/ins_masks.png', (tmp/tmp.max() * m[0,0]).detach().cpu().numpy())
+                # imageio.imwrite('tmp/m.png', m[0,0].detach().cpu().numpy())
+                # pdb.set_trace()
+
+
             b_indices = torch.ones_like(x_indices)*n
             sparse_coord = torch.stack([b_indices,y_indices,x_indices],dim=-1).int()
             sparse_coord_batch.append(sparse_coord)
@@ -194,12 +192,19 @@ class DecoderSparse(nn.Module):
         sparse_coord_batch = torch.cat(sparse_coord_batch,dim=0)
         sparse_feat_batch = torch.cat(sparse_feat_batch,dim=0)
         # pdb.set_trace()
+        # if self.use_ins_gn:
+        #     x = spconv.SparseConvTensor(sparse_feat_batch, sparse_coord_batch, (H,W), ins_cnt)
+        # else:
         x = spconv.SparseConvTensor(sparse_feat_batch, sparse_coord_batch, (H,W), N)
-
-
+        if self.use_ins_gn:
+            ins_indices_batch = torch.cat(ins_indices_batch,dim=0)
+            ins_indices_len = torch.cat(ins_indices_len,dim=0)
+            x = self.densepose_head(x, ins_indices_batch, ins_indices_len)
+        else:
+            x = self.densepose_head(x)
 
         # x = x * fg_mask
-        x = self.densepose_head(x)
+        # x = self.densepose_head(x, ins_mask_list)
         x = x.dense()
         x = self.predictor(x)
         return x
