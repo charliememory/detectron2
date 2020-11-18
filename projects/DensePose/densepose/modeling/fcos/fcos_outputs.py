@@ -1,5 +1,5 @@
 import logging
-import torch
+import torch, pdb
 from torch import nn
 import torch.nn.functional as F
 
@@ -116,7 +116,6 @@ class FCOSOutputs(nn.Module):
         training_targets = self.compute_targets_for_locations(
             locations, gt_instances, loc_to_size_range, num_loc_list
         )
-
         training_targets["locations"] = [locations.clone() for _ in range(len(gt_instances))]
         training_targets["im_inds"] = [
             locations.new_ones(locations.size(0), dtype=torch.long) * i for i in range(len(gt_instances))
@@ -375,7 +374,7 @@ class FCOSOutputs(nn.Module):
 
     def predict_proposals(
             self, logits_pred, reg_pred, ctrness_pred,
-            locations, image_sizes, top_feats=None
+            locations, image_sizes, top_feats=None#, eval_only=True
     ):
         if self.training:
             self.pre_nms_thresh = self.pre_nms_thresh_train
@@ -404,7 +403,7 @@ class FCOSOutputs(nn.Module):
             # we denormalize them here.
             l = per_bundle["l"]
             o = per_bundle["o"]
-            r = per_bundle["r"] * per_bundle["s"]
+            r = per_bundle["r"] * per_bundle["s"]# if eval_only else per_bundle["r"]
             c = per_bundle["c"]
             t = per_bundle["t"] if "t" in bundle else None
 

@@ -31,6 +31,7 @@ _C.MODEL.FCOS.POST_NMS_TOPK_TEST = 100
 _C.MODEL.FCOS.TOP_LEVELS = 2
 _C.MODEL.FCOS.NORM = "GN"  # Support GN or none
 _C.MODEL.FCOS.USE_SCALE = True
+_C.MODEL.FCOS.DISABLE_CLS_LOSS = False 
 
 # Multiply centerness before threshold
 # This will affect the final performance by about 0.05 AP but save some time
@@ -225,6 +226,8 @@ _C.MODEL.CONDINST.MASK_BRANCH.SEMANTIC_LOSS_ON = False
 _C.MODEL.CONDINST.MASK_BRANCH.NUM_LAMBDA_LAYER = 0
 _C.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R = 23
 _C.MODEL.CONDINST.MASK_BRANCH.USE_ASPP = False
+_C.MODEL.CONDINST.CHECKPOINT_GRAD_NUM = 0
+_C.MODEL.CONDINST.v2 = False
 
 # ---------------------------------------------------------------------------- #
 # CondInst added options
@@ -256,6 +259,11 @@ _C.MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE = 0
 _C.MODEL.CONDINST.IUVHead.USE_AGG_FEATURES = False
 _C.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN = False
 _C.MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP = False
+_C.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION = False
+_C.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention = False
+_C.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP = False
+_C.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER = False
+_C.MODEL.CONDINST.FINETUNE_IUVHead_ONLY = False
 
 # ---------------------------------------------------------------------------- #
 # TOP Module Options

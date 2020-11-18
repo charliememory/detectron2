@@ -3,6 +3,7 @@ from typing import List, Dict
 import torch
 from torch import nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 from detectron2.layers import ShapeSpec, NaiveSyncBatchNorm
 from detectron2.modeling.proposal_generator.build import PROPOSAL_GENERATOR_REGISTRY
@@ -51,6 +52,7 @@ class FCOS(nn.Module):
         self.in_features = cfg.MODEL.FCOS.IN_FEATURES
         self.fpn_strides = cfg.MODEL.FCOS.FPN_STRIDES
         self.yield_proposal = cfg.MODEL.FCOS.YIELD_PROPOSAL
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
 
         self.fcos_head = FCOSHead(cfg, [input_shape[f] for f in self.in_features])
         self.in_channels_to_top_module = self.fcos_head.in_channels_to_top_module
@@ -94,11 +96,11 @@ class FCOS(nn.Module):
                 locations, gt_instances, top_feats
             )
             
-            if self.yield_proposal:
+            if not self.use_gt_ins:
                 with torch.no_grad():
-                    results["proposals"] = self.fcos_outputs.predict_proposals(
+                    results["proposals_nms"] = self.fcos_outputs.predict_proposals(
                         logits_pred, reg_pred, ctrness_pred,
-                        locations, images.image_sizes, top_feats
+                        locations, images.image_sizes, top_feats#, eval_only=False
                     )
             return results, losses
         else:
@@ -145,6 +147,9 @@ class FCOSHead(nn.Module):
         in_channels = in_channels[0]
 
         self.in_channels_to_top_module = in_channels
+
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        # self.checkpoint_grad_num = 0
 
         for head in head_configs:
             tower = []
@@ -209,26 +214,58 @@ class FCOSHead(nn.Module):
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         torch.nn.init.constant_(self.cls_logits.bias, bias_value)
 
+    ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    def custom(self, module):
+        def custom_forward(*inputs):
+            inputs = module(inputs[0])
+            return inputs
+        return custom_forward
+
     def forward(self, x, top_module=None, yield_bbox_towers=False):
         logits = []
         bbox_reg = []
         ctrness = []
         top_feats = []
         bbox_towers = []
-        for l, feature in enumerate(x):
-            feature = self.share_tower(feature)
-            cls_tower = self.cls_tower(feature)
-            bbox_tower = self.bbox_tower(feature)
+        for l, feature in enumerate(x): 
+
+            if self.checkpoint_grad_num>0 and len(self.share_tower)>0:
+                modules = [module for k, module in self.share_tower._modules.items()]
+                feature = checkpoint.checkpoint_sequential(modules,1,feature)
+            else:
+                feature = self.share_tower(feature)
+
+            if self.checkpoint_grad_num>0 and len(self.cls_tower)>0:
+                modules = [module for k, module in self.cls_tower._modules.items()]
+                cls_tower = checkpoint.checkpoint_sequential(modules,1,feature)
+            else:
+                cls_tower = self.cls_tower(feature)
+
+            if self.checkpoint_grad_num>0 and len(self.bbox_tower)>0:
+                modules = [module for k, module in self.bbox_tower._modules.items()]
+                bbox_tower = checkpoint.checkpoint_sequential(modules,1,feature)
+            else:
+                bbox_tower = self.bbox_tower(feature)
+
+            if self.checkpoint_grad_num>0:
+                logits.append(checkpoint.checkpoint(self.custom(self.cls_logits), cls_tower))
+                ctrness.append(checkpoint.checkpoint(self.custom(self.ctrness), bbox_tower))
+                reg = checkpoint.checkpoint(self.custom(self.bbox_pred), bbox_tower)
+            else:
+                logits.append(self.cls_logits(cls_tower))
+                ctrness.append(self.ctrness(bbox_tower))
+                reg = self.bbox_pred(bbox_tower)
+
             if yield_bbox_towers:
                 bbox_towers.append(bbox_tower)
 
-            logits.append(self.cls_logits(cls_tower))
-            ctrness.append(self.ctrness(bbox_tower))
-            reg = self.bbox_pred(bbox_tower)
             if self.scales is not None:
                 reg = self.scales[l](reg)
             # Note that we use relu, as in the improved FCOS, instead of exp.
             bbox_reg.append(F.relu(reg))
             if top_module is not None:
-                top_feats.append(top_module(bbox_tower))
+                if self.checkpoint_grad_num>0:
+                    top_feats.append(checkpoint.checkpoint(self.custom(top_module),bbox_tower))
+                else:
+                    top_feats.append(top_module(bbox_tower))
         return logits, bbox_reg, ctrness, top_feats, bbox_towers

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import torch
 from torch import nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 import pdb
 
 from detectron2.structures import ImageList, Boxes
@@ -120,6 +121,18 @@ class CondInst(nn.Module):
 
         self.to(self.device)
 
+        # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
+        # if self.amp_enable:
+        #     self = self.half()
+
+        # ## debug
+        # # if self.amp_enable:
+        # # [p[1].data.dtype for p in self.named_parameters()]
+        # for p in self.named_parameters():
+        #     if p[1].data.dtype!=torch.float16:
+        #         print(p[1].data.dtype)
+        #         pdb.set_trace()
+
 
     def _init_densepose_head(self, cfg):
         # fmt: off
@@ -127,6 +140,11 @@ class CondInst(nn.Module):
         if not self.densepose_on:
             return
         self.densepose_data_filter = build_densepose_data_filter(cfg)
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
+        # if self.training and not self.use_gt_ins:
+        #     assert cfg.MODEL.FCOS.YIELD_PROPOSAL==True
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        self.finetune_iuvhead_only = cfg.MODEL.CONDINST.FINETUNE_IUVHead_ONLY
 
 
         # ## original ROI based densepose head
@@ -162,43 +180,55 @@ class CondInst(nn.Module):
         # )
         # self.densepose_losses = build_densepose_losses(cfg)
 
+    ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    def custom(self, module):
+        def custom_forward(*inputs):
+            inputs = module(inputs[0])
+            return inputs
+        return custom_forward
+
     "TODO: convert raw input to detectron2.structures.instances.Instances to reuse densepose code"
     def forward(self, batched_inputs):
         # pdb.set_trace()
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [self.normalizer(x) for x in images]
         images = ImageList.from_tensors(images, self.backbone.size_divisibility)
-        features = self.backbone(images.tensor)
 
-        if "instances" in batched_inputs[0]:
-            gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-            # if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
-            #     pdb.set_trace()
-            self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
-        else:
-            gt_instances = None
+        if self.finetune_iuvhead_only:
+            with torch.no_grad():
+                features = self.backbone(images.tensor)
 
-        agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
-        # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
-        if self.use_mask_feats_iuvhead:
-            iuv_feats, s_ins_feats = mask_feats, mask_feats
-        else:
-            iuv_feats, s_ins_feats = agg_feats, mask_feats
+                if "instances" in batched_inputs[0]:
+                    gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                    # if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
+                    #     pdb.set_trace()
+                    self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
+                else:
+                    gt_instances = None
 
-        # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
-        # pdb.set_trace()
+                agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+                # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
+                if self.use_mask_feats_iuvhead:
+                    iuv_feats, s_ins_feats = mask_feats, mask_feats
+                else:
+                    iuv_feats, s_ins_feats = agg_feats, mask_feats
 
-        # if torch.isnan(iuv_logits.mean()):
-        #     pdb.set_trace()
+                # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
+                # pdb.set_trace()
 
-        proposals, proposal_losses = self.proposal_generator(
-            images, features, gt_instances, self.controller
-        )
+                # if torch.isnan(iuv_logits.mean()):
+                #     pdb.set_trace()
+                 
+                # pdb.set_trace()
+
+                proposals, proposal_losses = self.proposal_generator(
+                    images, features, gt_instances, self.controller
+                )
 
 
 
 
-        if self.training:
+            assert self.training
             densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances)
 
             # # instances = 
@@ -247,79 +277,160 @@ class CondInst(nn.Module):
 
             return losses
         else:
-            # "TODO add densepose inference"
-            assert len(batched_inputs)==1
-            imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-            densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
-            # pdb.set_trace()
-            # import imageio
-            # im = batched_inputs[0]["image"]/255.
-            # im = F.interpolate(im.unsqueeze(0), size=imgsize)
-            # dp = densepose_instances[0]['instances']
-            # boxes = dp.pred_boxes.tensor.detach().cpu()
-            # segms = dp.pred_densepose.coarse_segm.detach().cpu()
-            # segms_comb = torch.zeros_like(im)
-            # for idx in range(boxes.shape[0]):
-            #     x1,y1,x2,y2 = boxes[idx].floor().int()
-            #     segms_comb[:,:,y1:y2,x1:x2] += F.interpolate(segms[idx:idx+1,1:2], (y2-y1,x2-x1))
-            # im = ((segms_comb+im)/2)[0].permute([1,2,0]).numpy()
-            # imageio.imwrite('tmp/im_ins_bbox.png', im)
-            # pdb.set_trace()
+            features = self.backbone(images.tensor)
 
-            # import imageio
-            # im = batched_inputs[0]["image"]/255.
-            # H, W = im.shape[-2:]
-            # S = densepose_outputs.coarse_segm.detach().cpu()
-            # ins_mask = F.interpolate(torch.sum(S,dim=0,keepdim=True), size=(H,W))[0,1:2]
-            # # S = F.interpolate(S, size=(H,W))
-            # # S = (S[:,0:1]<S[:,1:2]).float()
-            # # ins_mask = torch.sum(S,dim=0,keepdim=True)[0]\
-            # im = ((im+ins_mask)/2).permute([1,2,0]).numpy()
-            # imageio.imwrite('tmp/im_ins.png', im)
+            if "instances" in batched_inputs[0]:
+                gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                # if batched_inputs[0]['image'].shape[-1]!=images[0].shape[-1]:
+                #     pdb.set_trace()
+                self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
+            else:
+                gt_instances = None
+
+            agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+            # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
+            if self.use_mask_feats_iuvhead:
+                iuv_feats, s_ins_feats = mask_feats, mask_feats
+            else:
+                iuv_feats, s_ins_feats = agg_feats, mask_feats
+
+            # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride)
             # pdb.set_trace()
 
-            # ## original ROI based densepose head
-            # if self.iuv_head is None:
-            #     instances = densepose_instances[0]['instances']
-            #     pred_boxes = [x.pred_boxes for x in instances]
+            # if torch.isnan(iuv_logits.mean()):
+            #     pdb.set_trace()
+             
+            # pdb.set_trace()
 
-            #     features = [features[f] for f in self.in_features]
-            #     if self.use_decoder:
-            #         features = [self.decoder(features)]
-            #     # features = [iuv_feats]
-
-            #     features_dp = self.densepose_pooler(features, pred_boxes)
-            #     if len(features_dp) > 0:
-            #         densepose_head_outputs = self.densepose_head(features_dp)
-            #         densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
-            #     else:
-            #         densepose_predictor_outputs = None
-
-            #     densepose_inference(densepose_predictor_outputs, instances)
-
-            #     densepose_instances, _ = self.roi_heads(images, features, proposals, None)
+            proposals, proposal_losses = self.proposal_generator(
+                images, features, gt_instances, self.controller
+            )
 
 
-            return densepose_instances
 
 
-            # padded_im_h, padded_im_w = images.tensor.size()[-2:]
-            # processed_results = []
-            # for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
-            #     height = input_per_image.get("height", image_size[0])
-            #     width = input_per_image.get("width", image_size[1])
+            if self.training:
+                densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances)
 
-            #     instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
-            #     instances_per_im = self.postprocess(
-            #         instances_per_im, height, width,
-            #         padded_im_h, padded_im_w
-            #     )
+                # # instances = 
+                # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
 
-            #     processed_results.append({
-            #         "instances": instances_per_im
-            #     })
+                losses = {}
+                losses.update(sem_losses)
+                losses.update(proposal_losses)
+                # losses.update({"loss_mask": loss_mask})
+                losses.update(densepose_loss_dict)
 
-            # return processed_results
+                # ## original ROI based densepose head
+                # # proposals = proposals['instances']
+                # if self.iuv_head is None:
+
+                #     # proposals, _ = select_foreground_proposals(gt_instances, bg_label=1)
+                #     if len(gt_instances) > 0:
+                #         # pdb.set_trace()
+                #         # proposals = proposals['instances']
+                #         for ii in range(len(proposals)):
+                #             # pdb.set_trace()
+                #             gt_instances[ii].proposal_boxes=gt_instances[ii].gt_boxes
+
+                #         proposal_boxes = [x.proposal_boxes for x in gt_instances]
+
+                #         features = [features[f] for f in self.in_features]
+                #         if self.use_decoder:
+                #             features = [self.decoder(features)]
+                #         # features = [iuv_feats]
+
+                #         features_dp = self.densepose_pooler(features, proposal_boxes)
+                #         densepose_head_outputs = self.densepose_head(features_dp)
+                #         densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                #         densepose_loss_dict = self.densepose_losses(gt_instances, densepose_predictor_outputs)
+                #         # losses["loss_densepose_S_insBranch"] = losses["loss_densepose_S"]
+                #         del densepose_loss_dict["loss_densepose_S"]
+                #         del losses["loss_densepose_S"]
+                #         losses.update(densepose_loss_dict)
+                #         # losses = densepose_loss_dict
+
+                # print(losses)
+                # for k,v in losses.items():
+                #     if torch.isnan(v):
+                #         print(k,v)
+                #         pdb.set_trace()
+
+                return losses
+            else:
+                # "TODO add densepose inference"
+                assert len(batched_inputs)==1
+                imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
+                densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
+                # pdb.set_trace()
+                # import imageio
+                # im = batched_inputs[0]["image"]/255.
+                # im = F.interpolate(im.unsqueeze(0), size=imgsize)
+                # dp = densepose_instances[0]['instances']
+                # boxes = dp.pred_boxes.tensor.detach().cpu()
+                # segms = dp.pred_densepose.coarse_segm.detach().cpu()
+                # segms_comb = torch.zeros_like(im)
+                # for idx in range(boxes.shape[0]):
+                #     x1,y1,x2,y2 = boxes[idx].floor().int()
+                #     segms_comb[:,:,y1:y2,x1:x2] += F.interpolate(segms[idx:idx+1,1:2], (y2-y1,x2-x1))
+                # im = ((segms_comb+im)/2)[0].permute([1,2,0]).numpy()
+                # imageio.imwrite('tmp/im_ins_bbox.png', im)
+                # pdb.set_trace()
+
+                # import imageio
+                # im = batched_inputs[0]["image"]/255.
+                # H, W = im.shape[-2:]
+                # S = densepose_outputs.coarse_segm.detach().cpu()
+                # ins_mask = F.interpolate(torch.sum(S,dim=0,keepdim=True), size=(H,W))[0,1:2]
+                # # S = F.interpolate(S, size=(H,W))
+                # # S = (S[:,0:1]<S[:,1:2]).float()
+                # # ins_mask = torch.sum(S,dim=0,keepdim=True)[0]\
+                # im = ((im+ins_mask)/2).permute([1,2,0]).numpy()
+                # imageio.imwrite('tmp/im_ins.png', im)
+                # pdb.set_trace()
+
+                # ## original ROI based densepose head
+                # if self.iuv_head is None:
+                #     instances = densepose_instances[0]['instances']
+                #     pred_boxes = [x.pred_boxes for x in instances]
+
+                #     features = [features[f] for f in self.in_features]
+                #     if self.use_decoder:
+                #         features = [self.decoder(features)]
+                #     # features = [iuv_feats]
+
+                #     features_dp = self.densepose_pooler(features, pred_boxes)
+                #     if len(features_dp) > 0:
+                #         densepose_head_outputs = self.densepose_head(features_dp)
+                #         densepose_predictor_outputs = self.densepose_predictor(densepose_head_outputs)
+                #     else:
+                #         densepose_predictor_outputs = None
+
+                #     densepose_inference(densepose_predictor_outputs, instances)
+
+                #     densepose_instances, _ = self.roi_heads(images, features, proposals, None)
+
+
+                return densepose_instances
+
+
+                # padded_im_h, padded_im_w = images.tensor.size()[-2:]
+                # processed_results = []
+                # for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
+                #     height = input_per_image.get("height", image_size[0])
+                #     width = input_per_image.get("width", image_size[1])
+
+                #     instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
+                #     instances_per_im = self.postprocess(
+                #         instances_per_im, height, width,
+                #         padded_im_h, padded_im_w
+                #     )
+
+                #     processed_results.append({
+                #         "instances": instances_per_im
+                #     })
+
+                # return processed_results
 
     def _forward_mask_heads_train(self, proposals, fpn_features, mask_feats, iuv_feats, gt_instances: List[Instances]):
         # prepare the inputs for mask heads
@@ -335,6 +446,21 @@ class CondInst(nn.Module):
 
         pred_instances.mask_head_params = pred_instances.top_feats
 
+        if not self.use_gt_ins:
+            # keep_idxs = proposals["keep_idxs"]
+            # prepare the inputs for mask heads
+            pps = proposals["proposals_nms"]
+            for im_id, per_im in enumerate(pps):
+                per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
+            # pdb.set_trace()
+            for ii in range(len(pps)):
+                pps[ii]._image_size = (0,0)
+            pred_instances_nms = Instances.cat(pps)
+            pred_instances_nms.mask_head_params = pred_instances_nms.top_feat
+        else:
+            # keep_idxs = None
+            pred_instances_nms = None
+
         # loss_mask = self.mask_head(
         #     mask_feats, iuv_logits, self.mask_branch.out_stride,
         #     pred_instances, gt_instances
@@ -342,7 +468,7 @@ class CondInst(nn.Module):
         loss_mask = self.mask_head(self.iuv_head, 
             fpn_features, mask_feats, iuv_feats, 
             self.mask_branch.out_stride, pred_instances, gt_instances=gt_instances, 
-            mask_out_bg_feats=self.mask_out_bg_feats
+            mask_out_bg_feats=self.mask_out_bg_feats, pred_instances_nms=pred_instances_nms,
         )
 
         return loss_mask
@@ -353,6 +479,7 @@ class CondInst(nn.Module):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
         pred_instances = Instances.cat(proposals)
         pred_instances.mask_head_params = pred_instances.top_feat
+        # pdb.set_trace()
         # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride, pred_instances)
         # densepose_instances, densepose_outputs = self.mask_head(
         #     mask_feats, iuv_logits, self.mask_branch.out_stride, pred_instances

@@ -1,5 +1,6 @@
 
 import math
+import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
@@ -14,7 +15,43 @@ from .resnet_lpf import build_resnet_lpf_backbone
 from .resnet_interval import build_resnet_interval_backbone
 from .mobilenet import build_mnv2_backbone
 from .resnet import build_densepose_resnet_backbone
+from .resnetws import build_densepose_resnetws_backbone
 
+
+class Conv2dWS(Conv2d):
+    """
+    A wrapper around :class:`torch.nn.Conv2d` to support empty inputs and more features.
+    """
+    def forward(self, x):
+        # torchscript does not support SyncBatchNorm yet
+        # https://github.com/pytorch/pytorch/issues/40507
+        # and we skip these codes in torchscript since:
+        # 1. currently we only support torchscript in evaluation mode
+        # 2. features needed by exporting module to torchscript are added in PyTorch 1.6 or
+        # later version, `Conv2d` in these PyTorch versions has already supported empty inputs.
+        if not torch.jit.is_scripting():
+            if x.numel() == 0 and self.training:
+                # https://github.com/pytorch/pytorch/issues/12013
+                assert not isinstance(
+                    self.norm, torch.nn.SyncBatchNorm
+                ), "SyncBatchNorm does not support empty inputs!"
+
+        ## Weight Standardization
+        weight = self.weight
+        weight_mean = weight.mean(dim=1, keepdim=True).mean(dim=2,
+                                  keepdim=True).mean(dim=3, keepdim=True)
+        weight = weight - weight_mean
+        std = weight.view(weight.size(0), -1).std(dim=1).view(-1, 1, 1, 1) + 1e-5
+        weight = weight / std.expand_as(weight)
+
+        x = F.conv2d(
+            x, weight, self.bias, self.stride, self.padding, self.dilation, self.groups
+        )
+        if self.norm is not None:
+            x = self.norm(x)
+        if self.activation is not None:
+            x = self.activation(x)
+        return x
 
 class FPN(Backbone):
     """
@@ -70,10 +107,10 @@ class FPN(Backbone):
             lateral_norm = get_norm(norm, out_channels)
             output_norm = get_norm(norm, out_channels)
 
-            lateral_conv = Conv2d(
+            lateral_conv = Conv2dWS(
                 in_channels, out_channels, kernel_size=1, bias=use_bias, norm=lateral_norm
             )
-            output_conv = Conv2d(
+            output_conv = Conv2dWS(
                 out_channels,
                 out_channels,
                 kernel_size=3,
@@ -200,8 +237,10 @@ class LastLevelP6P7(nn.Module):
         super().__init__()
         self.num_levels = 2
         self.in_feature = in_features
-        self.p6 = nn.Conv2d(in_channels, out_channels, 3, 2, 1)
-        self.p7 = nn.Conv2d(out_channels, out_channels, 3, 2, 1)
+        # self.p6 = nn.Conv2d(in_channels, out_channels, 3, 2, 1)
+        # self.p7 = nn.Conv2d(out_channels, out_channels, 3, 2, 1)
+        self.p6 = Conv2dWS(in_channels, out_channels, 3, 2, 1)
+        self.p7 = Conv2dWS(out_channels, out_channels, 3, 2, 1)
         for module in [self.p6, self.p7]:
             weight_init.c2_xavier_fill(module)
 
@@ -220,7 +259,8 @@ class LastLevelP6(nn.Module):
         super().__init__()
         self.num_levels = 1
         self.in_feature = in_features
-        self.p6 = nn.Conv2d(in_channels, out_channels, 3, 2, 1)
+        # self.p6 = nn.Conv2d(in_channels, out_channels, 3, 2, 1)
+        self.p6 = Conv2dWS(in_channels, out_channels, 3, 2, 1)
         for module in [self.p6]:
             weight_init.c2_xavier_fill(module)
 
@@ -230,7 +270,7 @@ class LastLevelP6(nn.Module):
 
 
 @BACKBONE_REGISTRY.register()
-def build_fcos_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
+def build_fcos_resnet_fpnws_backbone(cfg, input_shape: ShapeSpec):
     """
     Args:
         cfg: a detectron2 CfgNode
@@ -239,13 +279,17 @@ def build_fcos_resnet_fpn_backbone(cfg, input_shape: ShapeSpec):
         backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
     """
     if cfg.MODEL.BACKBONE.ANTI_ALIAS:
-        bottom_up = build_resnet_lpf_backbone(cfg, input_shape)
+        raise NotImplementedError
+        # bottom_up = build_resnet_lpf_backbone(cfg, input_shape)
     elif cfg.MODEL.RESNETS.DEFORM_INTERVAL > 1:
-        bottom_up = build_resnet_interval_backbone(cfg, input_shape)
+        raise NotImplementedError
+        # bottom_up = build_resnet_interval_backbone(cfg, input_shape)
     elif cfg.MODEL.MOBILENET:
-        bottom_up = build_mnv2_backbone(cfg, input_shape)
+        raise NotImplementedError
+        # bottom_up = build_mnv2_backbone(cfg, input_shape)
     else:
-        bottom_up = build_densepose_resnet_backbone(cfg, input_shape)
+        # bottom_up = build_densepose_resnet_backbone(cfg, input_shape)
+        bottom_up = build_densepose_resnetws_backbone(cfg, input_shape)
     in_features = cfg.MODEL.FPN.IN_FEATURES
     out_channels = cfg.MODEL.FPN.OUT_CHANNELS
     top_levels = cfg.MODEL.FCOS.TOP_LEVELS

@@ -236,6 +236,20 @@ class DynamicMaskHead(nn.Module):
         self.norm_coord_boxHW = cfg.MODEL.CONDINST.IUVHead.NORM_COORD_BOXHW
         self.dilate_ks = cfg.MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE
         # self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
+        self.no_mask_overlap = cfg.MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP
+        self.use_weight_std = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
+        self.finetune_iuvhead_only = cfg.MODEL.CONDINST.FINETUNE_IUVHead_ONLY
+
+        # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
+        # if self.amp_enable:
+        #     self = self.half()
+        ## debug
+        # # if self.amp_enable:
+        # # [p[1].data.dtype for p in self.named_parameters()]
+        # for p in self.named_parameters():
+        #     if p[1].data.dtype!=torch.float16:
+        #         print(p[1].data.dtype)
+        #         pdb.set_trace()
 
     def mask_heads_forward(self, features, weights, biases, num_insts):
         '''
@@ -248,6 +262,17 @@ class DynamicMaskHead(nn.Module):
         n_layers = len(weights)
         x = features
         for i, (w, b) in enumerate(zip(weights, biases)):
+
+            ## Weight Standardization
+            if self.use_weight_std:
+                weight = w
+                weight_mean = weight.mean(dim=1, keepdim=True).mean(dim=2,
+                                          keepdim=True).mean(dim=3, keepdim=True)
+                weight = weight - weight_mean
+                std = weight.view(weight.size(0), -1).std(dim=1).view(-1, 1, 1, 1) + 1e-5
+                weight = weight / std.expand_as(weight)
+                w = weight
+
             x = F.conv2d(
                 x, w, bias=b,
                 stride=1, padding=0,
@@ -435,13 +460,16 @@ class DynamicMaskHead(nn.Module):
         return ins_mask_list
 
     def __call__(self, iuv_head_func, fpn_features, mask_feats, iuv_feats, mask_feat_stride, pred_instances, 
-            gt_instances=None, mask_out_bg_feats="none"):
-        
+            gt_instances=None, mask_out_bg_feats="none", pred_instances_nms=None):
+        torch.cuda.empty_cache()
         if self.training:
             gt_inds = pred_instances.gt_inds
             gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
             gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
             # pdb.set_trace()
+            # if pred_instances.labels.sum()>0:
+            #     print("non-person instances exist")
+            #     pdb.set_trace()
 
             losses = {}
             if len(pred_instances) == 0:
@@ -452,9 +480,15 @@ class DynamicMaskHead(nn.Module):
                 losses["loss_densepose_V"] = mask_feats.sum() * 0
                 losses["loss_densepose_S"] = mask_feats.sum() * 0
             else:
-                s_logits, relative_coords = self.mask_heads_forward_with_coords(
-                    mask_feats, mask_feat_stride, pred_instances
-                )
+                if self.finetune_iuvhead_only:
+                    with torch.no_grad():
+                        s_logits, relative_coords = self.mask_heads_forward_with_coords(
+                            mask_feats, mask_feat_stride, pred_instances
+                        )
+                else:
+                    s_logits, relative_coords = self.mask_heads_forward_with_coords(
+                        mask_feats, mask_feat_stride, pred_instances
+                    )
                 if self.n_segm_chan==1:
                     s_logits = s_logits.sigmoid()
                 elif self.n_segm_chan==3:
@@ -477,50 +511,68 @@ class DynamicMaskHead(nn.Module):
                         rel_coord, ins_mask_list = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, 
                             s_logits.device, self.norm_coord_boxHW, self.dilate_ks)
                         # fg_mask = (rel_coord[:,0:1]!=0).float()
-                        # ins_mask_list = self.remove_mask_overlap(ins_mask_list)
-                        fg_mask = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
-                        fg_mask = torch.stack(fg_mask, dim=0)
-                        
+                        # if self.no_mask_overlap:
+                        #     ins_mask_list = self.remove_mask_overlap(ins_mask_list)
+                        # fg_mask = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
+                        # fg_mask = torch.stack(fg_mask, dim=0)
+
                         # fg_mask = F.interpolate(fg_mask, (H,W))
                         # ins_mask_list = [per_im.gt_bitmasks for per_im in gt_instances]
                     else:
+
+
+                        if self.finetune_iuvhead_only:
+                            with torch.no_grad():
+                                s_logits_keep, relative_coords_keep = self.mask_heads_forward_with_coords(
+                                    mask_feats, mask_feat_stride, pred_instances_nms
+                                )
+                        else:
+                            s_logits_keep, relative_coords_keep = self.mask_heads_forward_with_coords(
+                                mask_feats, mask_feat_stride, pred_instances_nms
+                            )
+
                         "TODO: upsample or recalculate rel_coord"
                         assert not self.norm_coord_boxHW
-                        im_inds = pred_instances.im_inds
+                        im_inds = pred_instances_nms.im_inds
                         rel_coord_list = []
-                        fg_mask_list = []
-                        # pdb.set_trace()
-                        # if relative_coords.shape[-1]<H*W:
-                        #     ratio = math.sqrt(float(H*W)/relative_coords.shape[-1])
-                        #     relative_coords = F.interpolate(relative_coords.reshape(-1, 2, H//ratio, W), scale_factor=ratio)*ratio
-                        pred_bitmasks = (s_logits[:,-1:].detach()>0.05).float()
+                        pred_bitmasks = (s_logits_keep[:,-1:].detach()>0.05).float()
                         pred_bitmasks = F.interpolate(pred_bitmasks, (H,W))
                         pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
                         pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
                         ins_mask_list = []
                         for idx in range(N):
                             if idx in im_inds:
-                                
-                                cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+                                # pdb.set_trace()
+                                cc = relative_coords_keep[im_inds==idx,].reshape(-1, 2, H, W)
                                 mm = pred_bitmasks[im_inds==idx,]
-                                # cc = relative_coords[im_inds==idx,].reshape(-1, 2, s_logits.shape[-2]//2, s_logits.shape[-1]//2)
-                                # ss = F.interpolate(s_logits, scale_factor=0.5)[im_inds==idx,-1:]
-
                                 coord = torch.sum(cc*mm, dim=0, keepdim=True) 
                                 rel_coord_list.append(coord) #.reshape(1, 2, H, W)
-                                fg_mask_list.append((torch.sum(mm, dim=0, keepdim=True)>0).float())
-                                ins_mask_list.append(mm)
+                                ins_mask_list.append(mm[:,0])
                         rel_coord = torch.cat(rel_coord_list, dim=0)
-                        # ins_mask_list = self.remove_mask_overlap(ins_mask_list)
+                    # pdb.set_trace()
+                    if self.no_mask_overlap:
+                        ins_mask_list = self.remove_mask_overlap(ins_mask_list)
+                    fg_mask = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
+                    fg_mask = torch.clamp(torch.stack(fg_mask, dim=0), min=0, max=1)
+                    # pdb.set_trace()
 
-                        # fg_mask = (rel_coord[:,0:1]!=0).float()
-                        # fg_mask = F.interpolate(torch.cat(fg_mask_list,dim=0), (H,W))
+
+
+                    # import imageio
+                    # for ii in range(ins_mask_list[0].shape[0]):
+                    #     imageio.imwrite("tmp/ins_mask_{}.png".format(ii), ins_mask_list[0][ii].detach().cpu().numpy())
+                    # imageio.imwrite("tmp/fg_mask.png", fg_mask[0,0].detach().cpu().numpy())
+                    # fg_mask2 = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
+                    # fg_mask2 = torch.stack(fg_mask2, dim=0).float()
+                    # imageio.imwrite("tmp/fg_mask2.png", (fg_mask2[0,0]/fg_mask2[0,0].max()).detach().cpu().numpy())
+                    # pdb.set_trace()
 
                     ## remove overlap
                     # print(torch.sum(ins_mask_list[0],dim=0).max())
-                    for i in range(len(ins_mask_list)):
-                        if ins_mask_list[i].sum()!=fg_mask[i].sum():
-                            pdb.set_trace()
+                    # for i in range(len(ins_mask_list)):
+                    #     if ins_mask_list[i].sum()!=fg_mask[i].sum():
+                    #         pdb.set_trace()
+
                     # print(ins_mask_list[0].sum())
                     # print(torch.sum(ins_mask_list[1]))
 
@@ -584,13 +636,20 @@ class DynamicMaskHead(nn.Module):
                             # imageio.imwrite("tmp/fg_mask_hard_0.05_dilate.png", fg_mask[0,0].detach().cpu().numpy())
 
                     # import imageio
-                    # rel_coord_gt,_ = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device, self.norm_coord_boxHW, self.dilate_ks)
-                    
-                    # # imageio.imwrite("tmp/rel_coord.png", rel_coord[0,0].detach().cpu().numpy())
+                    # rel_coord_gt, ins_mask_gt_list = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device, self.norm_coord_boxHW, self.dilate_ks)
+                    # for ii in range(ins_mask_list[0].shape[0]):
+                    #     imageio.imwrite("tmp/ins_mask_{}.png".format(ii), ins_mask_list[0][ii].detach().cpu().numpy())
+                    # for ii in range(ins_mask_gt_list[0].shape[0]):
+                    #     imageio.imwrite("tmp/ins_mask_gt_{}.png".format(ii), ins_mask_gt_list[0][ii].detach().cpu().numpy())
+                    # imageio.imwrite("tmp/rel_coord.png", rel_coord[0,0].detach().cpu().numpy())
                     # imageio.imwrite("tmp/rel_coord_gt.png", rel_coord_gt[0,0].detach().cpu().numpy())
                     # imageio.imwrite("tmp/fg_mask.png", fg_mask[0,0].detach().cpu().numpy())
+                    # fg_mask_gt = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_gt_list]
+                    # fg_mask_gt = torch.clamp(torch.stack(fg_mask_gt, dim=0), min=0, max=1)
+                    # imageio.imwrite("tmp/fg_mask_gt.png", fg_mask_gt[0,0].detach().cpu().numpy())
                     # pdb.set_trace()
                     # imageio.imwrite("tmp/ins_mask.png", torch.sum(ins_mask_list[0],dim=0).detach().cpu().numpy())
+                    # imageio.imwrite("tmp/ins_mask1.png", torch.sum(ins_mask_list[1],dim=0).detach().cpu().numpy())
 
                     # fg_mask_gt = (rel_coord_gt[:,0:1]!=0).float()
                     # fg_mask_gt = F.interpolate(fg_mask_gt, (H,W))
@@ -600,7 +659,8 @@ class DynamicMaskHead(nn.Module):
                     #     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
                     # else:
                     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
-                    # pdb.set_trace()
+                    
+                    # iuv_logits = iuv_feats[:1,:75,:112,:112].expand_as(iuv_logits)
 
                     if isinstance(iuv_logits, list):
                         densepose_outputs = []
@@ -634,7 +694,7 @@ class DynamicMaskHead(nn.Module):
                         gt_instances, densepose_outputs, gt_bitmasks
                     )
                     losses.update(densepose_loss_dict)
-
+            torch.cuda.empty_cache()
             return losses
 
         else:
@@ -670,34 +730,73 @@ class DynamicMaskHead(nn.Module):
                 #     rel_coord = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device)
                 # else:
 
-                rel_coord = torch.zeros([N,2,H,W], device=mask_feats.device).float()
+                "TODO: upsample or recalculate rel_coord"
+                assert not self.norm_coord_boxHW
                 im_inds = pred_instances.im_inds
+                rel_coord_list = []
+                fg_mask_list = []
+
+                pred_bitmasks = (s_logits[:,-1:].detach()>0.05).float()
+                pred_bitmasks = F.interpolate(pred_bitmasks, (H,W))
+                pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
+                pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+                ins_mask_list = []
                 for idx in range(N):
                     if idx in im_inds:
+                        
                         cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
-                        ss = s_logits[im_inds==idx,-1:]
-                        coord = torch.mean(cc*ss, dim=0, keepdim=True) 
-                        rel_coord[idx:idx+1] = coord #.reshape(1, 2, H, W)
+                        mm = pred_bitmasks[im_inds==idx,]
+                        # cc = relative_coords[im_inds==idx,].reshape(-1, 2, s_logits.shape[-2]//2, s_logits.shape[-1]//2)
+                        # ss = F.interpolate(s_logits, scale_factor=0.5)[im_inds==idx,-1:]
+                        # pdb.set_trace()
+                        coord = torch.sum(cc*mm, dim=0, keepdim=True) 
+                        rel_coord_list.append(coord) #.reshape(1, 2, H, W)
+                        fg_mask_list.append((torch.sum(mm, dim=0, keepdim=True)>0).float())
+                        ins_mask_list.append(mm[:,0])
+                rel_coord = torch.cat(rel_coord_list, dim=0)
 
+                if self.no_mask_overlap:
+                    ins_mask_list = self.remove_mask_overlap(ins_mask_list)
+                fg_mask = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
+                fg_mask = torch.clamp(torch.stack(fg_mask, dim=0), min=0, max=1)
+                # pdb.set_trace()
+                # rel_coord = torch.zeros([N,2,H,W], device=mask_feats.device).float()
+                # im_inds = pred_instances.im_inds
+                # for idx in range(N):
+                #     if idx in im_inds:
+                #         cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
+                #         ss = s_logits[im_inds==idx,-1:]
+                #         coord = torch.mean(cc*ss, dim=0, keepdim=True) 
+                #         rel_coord[idx:idx+1] = coord #.reshape(1, 2, H, W)
+
+                # import imageio
+                # for ii in range(ins_mask_list[0].shape[0]):
+                #     imageio.imwrite("tmp/ins_mask_{}.png".format(ii), ins_mask_list[0][ii].detach().cpu().numpy())
+                # imageio.imwrite("tmp/fg_mask.png", fg_mask[0,0].detach().cpu().numpy())
+                # fg_mask2 = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
+                # fg_mask2 = torch.stack(fg_mask2, dim=0).float()
+                # imageio.imwrite("tmp/fg_mask2.png", (fg_mask2[0,0]/fg_mask2[0,0].max()).detach().cpu().numpy())
+                # pdb.set_trace()
+                
 
                 if mask_out_bg_feats == "none":
                     fg_mask = torch.ones([N,1,H,W], device=iuv_feats.device)
-                else:
-                    # N = iuv_feats.shape[0]
-                    fg_mask = s_logits[:,-1:].detach()
-                    fg_mask_list = []
-                    for i in range(N):
-                        fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
-                    fg_mask = torch.cat(fg_mask_list, dim=0).detach()
-                    if mask_out_bg_feats=="hard":
-                        fg_mask = (fg_mask>0.1).float()
-                    fg_mask = F.interpolate(fg_mask, (H,W))
-                if self.dilate_ks>0:
-                    fg_mask = self._torch_dilate(fg_mask, kernel_size=self.dilate_ks)
+                # else:
+                #     # N = iuv_feats.shape[0]
+                #     fg_mask = s_logits[:,-1:].detach()
+                #     fg_mask_list = []
+                #     for i in range(N):
+                #         fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
+                #     fg_mask = torch.cat(fg_mask_list, dim=0).detach()
+                #     if mask_out_bg_feats=="hard":
+                #         fg_mask = (fg_mask>0.1).float()
+                #     fg_mask = F.interpolate(fg_mask, (H,W))
+                # if self.dilate_ks>0:
+                #     fg_mask = self._torch_dilate(fg_mask, kernel_size=self.dilate_ks)
                 # fg_mask = self._torch_dilate(fg_mask, kernel_size=3)
                 #     iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances)
                 # else:
-                iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask)
+                iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, ins_mask_list=ins_mask_list)
                 
                 # iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
 
@@ -723,6 +822,7 @@ class DynamicMaskHead(nn.Module):
                 #                     pred_instances, size=(256,256))
             else:
                 densepose_outputs = None
+            torch.cuda.empty_cache()
             return pred_instances, densepose_outputs
 
 

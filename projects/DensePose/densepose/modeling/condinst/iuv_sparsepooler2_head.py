@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Any
 import torch, pdb, os, pickle
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 from fvcore.nn import sigmoid_focal_loss_jit
 import fvcore.nn.weight_init as weight_init
@@ -62,6 +63,8 @@ class DecoderSparse(nn.Module):
         lambda_layer_r = cfg.MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R
         self.use_agg_feat    = cfg.MODEL.CONDINST.IUVHead.USE_AGG_FEATURES
         self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        agg_channels = cfg.MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS
         # fmt: on
 
         if not self.use_agg_feat:
@@ -105,7 +108,7 @@ class DecoderSparse(nn.Module):
             )
         else:
             self.comb_pe_conv = Conv2d(
-                conv_dims+pe_dim,
+                agg_channels+pe_dim,
                 conv_dims,
                 kernel_size=3,
                 stride=1,
@@ -121,8 +124,30 @@ class DecoderSparse(nn.Module):
         self.predictor = Conv2d(
             cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
         )
+
+        # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
+        # self.amp_enable = False
+        # if self.amp_enable:
+        #     self = self.half()
+
         initialize_module_params(self.predictor)
         # weight_init.c2_msra_fill(self.predictor)
+
+        ## debug
+        # pdb.set_trace()
+        # if self.amp_enable:
+        # [p[1].data.dtype for p in self.named_parameters()]
+        # for p in self.named_parameters():
+        #     if p[1].data.dtype!=torch.float16:
+        #         print(p[1].data.dtype)
+        #         pdb.set_trace()
+
+    ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    def custom(self, module):
+        def custom_forward(*inputs):
+            inputs = module(inputs[0])
+            return inputs
+        return custom_forward
 
     def forward(self, features: List[torch.Tensor], iuv_feats: torch.Tensor, rel_coord: torch.Tensor, 
                 abs_coord: torch.Tensor, fg_mask: torch.Tensor, ins_mask_list: List[torch.Tensor]):
@@ -157,6 +182,7 @@ class DecoderSparse(nn.Module):
         ins_cnt = 0
         for n in range(N):
             m = fg_mask[n:n+1]
+            # pdb.set_trace()
             x_indices = coord[0][m[0,0]>0]
             y_indices = coord[1][m[0,0]>0]
             if self.use_ins_gn:
@@ -206,7 +232,18 @@ class DecoderSparse(nn.Module):
         # x = x * fg_mask
         # x = self.densepose_head(x, ins_mask_list)
         x = x.dense()
-        x = self.predictor(x)
+
+        # if self.checkpoint_grad_num>0 and len(self.bbox_tower)>0:
+        #     modules = [module for k, module in self.bbox_tower._modules.items()]
+        #     bbox_tower = checkpoint.checkpoint_sequential(modules,1,feature)
+        # else:
+        #     bbox_tower = self.bbox_tower(feature)
+
+        if self.checkpoint_grad_num>0:
+            x = checkpoint.checkpoint(self.custom(self.predictor), x)
+        else:
+            x = self.predictor(x)
+
         return x
 
 
@@ -216,6 +253,7 @@ class CoordGlobalIUVSparsePooler2Head(CoordGlobalIUVPooler2Head):
         self.use_rel_coords = cfg.MODEL.CONDINST.IUVHead.REL_COORDS
         self.use_abs_coords = cfg.MODEL.CONDINST.IUVHead.ABS_COORDS
         self.pos_emb_num_freqs = cfg.MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.use_pos_emb = self.pos_emb_num_freqs>0
         if self.use_pos_emb:
             self.position_embedder, self.position_emb_dim = get_embedder(multires=self.pos_emb_num_freqs, input_dims=2)

@@ -4,6 +4,7 @@ import fvcore.nn.weight_init as weight_init
 import torch, pdb
 from torch import nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 from detectron2.config import CfgNode
 from detectron2.layers import Conv2d
@@ -27,6 +28,7 @@ class DensePoseDeepLabHead(nn.Module):
         norm                 = cfg.MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM
         self.n_stacked_convs = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_STACKED_CONVS
         self.use_nonlocal    = cfg.MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NONLOCAL_ON
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         # fmt: on
         pad_size = kernel_size // 2
         n_channels = input_channels
@@ -57,20 +59,42 @@ class DensePoseDeepLabHead(nn.Module):
         self.n_out_channels = hidden_dim
         # initialize_module_params(self)
 
+    ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    def custom(self, module):
+        def custom_forward(*inputs):
+            inputs = module(inputs[0])
+            return inputs
+        return custom_forward
+
     def forward(self, features):
         x0 = features
-        x = self.ASPP(x0)
+        if self.checkpoint_grad_num>0:
+            x = checkpoint.checkpoint(self.custom(self.ASPP), x0)
+        else:
+            x = self.ASPP(x0)
         # print(x0.shape, x.shape)
         if self.use_nonlocal:
             x = self.NLBlock(x)
         output = x
         for i in range(self.n_stacked_convs):
             layer_name = self._get_layer_name(i)
-            x = getattr(self, layer_name)(x)
+            layer = getattr(self, layer_name)
+            # x = getattr(self, layer_name)(x)
+
+            if self.checkpoint_grad_num>0:
+                x = checkpoint.checkpoint(self.custom(layer), x)
+            else:
+                x = layer(x)
+
             x = F.relu(x)
             output = x
         # print(x.shape)
+
+        ## debug
         # pdb.set_trace()
+        # layer = getattr(self, layer_name)
+        # [p[1].data.dtype for p in layer.half().named_parameters()]
+
         return output
 
     def _get_layer_name(self, i: int):

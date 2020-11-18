@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Any
 import torch, pdb, os, pickle
 import torch.nn as nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 from fvcore.nn import sigmoid_focal_loss_jit
 import fvcore.nn.weight_init as weight_init
@@ -159,7 +160,6 @@ class CoordGlobalIUVPooler2Head(nn.Module):
         if self.use_abs_coords:
             self.pe_dim_all += self.position_emb_dim
         self.decoder = Decoder(cfg, input_shape, self.in_features, self.pe_dim_all)
-
 
         dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.HEATMAP_SIZE
         dp_pooler_sampling_ratio   = 0

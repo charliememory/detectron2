@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import numpy as np
@@ -14,6 +15,36 @@ def reduce_sum(tensor):
     dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     return tensor
 
+
+class aligned_bilinear_layer(nn.Module):
+    def __init__(self, factor):
+        super(aligned_bilinear_layer, self).__init__()
+        assert factor >= 1
+        assert int(factor) == factor
+        self.factor = factor
+
+    def forward(self, tensor):
+        assert tensor.dim() == 4
+
+        factor = self.factor
+        if factor == 1:
+            return tensor
+
+        h, w = tensor.size()[2:]
+        tensor = F.pad(tensor, pad=(0, 1, 0, 1), mode="replicate")
+        oh = factor * h + 1
+        ow = factor * w + 1
+        tensor = F.interpolate(
+            tensor, size=(oh, ow),
+            mode='bilinear',
+            align_corners=True
+        )
+        tensor = F.pad(
+            tensor, pad=(factor // 2, 0, factor // 2, 0),
+            mode="replicate"
+        )
+
+        return tensor[:, :, :oh - 1, :ow - 1]
 
 def aligned_bilinear(tensor, factor):
     assert tensor.dim() == 4

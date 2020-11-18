@@ -6,6 +6,8 @@ import math
 import torch, pdb
 from torch import nn
 from torch.nn import functional as F
+# from torch.utils.checkpoint import checkpoint_sequential
+import torch.utils.checkpoint as checkpoint
 
 from fvcore.nn import sigmoid_focal_loss_jit
 import fvcore.nn.weight_init as weight_init
@@ -14,7 +16,7 @@ from detectron2.layers import Conv2d, ShapeSpec, get_norm
 # from adet.layers import conv_with_kaiming_uniform
 # from adet.utils.comm import aligned_bilinear
 from densepose.layers import conv_with_kaiming_uniform
-from densepose.utils.comm import aligned_bilinear
+from densepose.utils.comm import aligned_bilinear, aligned_bilinear_layer
 # from densepose.roi_heads.deeplab import ASPP
 
 from lambda_networks import LambdaLayer
@@ -59,7 +61,7 @@ class ASPP(nn.Module):
             nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, 1, bias=False),
                 nn.GroupNorm(32, out_channels),
-                nn.ReLU(),
+                nn.ReLU(inplace=True),
             )
         )
 
@@ -74,7 +76,7 @@ class ASPP(nn.Module):
         self.project = nn.Sequential(
             nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
             # nn.BatchNorm2d(out_channels),
-            nn.ReLU()
+            nn.ReLU(inplace=True)
             # nn.Dropout(0.5)
         )
 
@@ -84,6 +86,35 @@ class ASPP(nn.Module):
             res.append(conv(x))
         res = torch.cat(res, dim=1)
         return self.project(res)
+
+
+class eca_layer(nn.Module):
+    """Constructs a ECA module.
+    Args:
+        channel: Number of channels of the input feature map
+        k_size: Adaptive selection of kernel size
+    """
+    def __init__(self, channel, k_size=3):
+        super(eca_layer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # x: input features with shape [b, c, h, w]
+        b, c, h, w = x.size()
+
+        # feature descriptor on the global spatial information
+        y = self.avg_pool(x)
+
+        # Two different branches of ECA module
+        y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
+
+        # Multi-scale information fusion
+        y = self.sigmoid(y)
+
+        return x * y.expand_as(x)
+
 
 ## Ref: densepose roi_head.py
 class Decoder(nn.Module):
@@ -162,14 +193,19 @@ class MaskBranch(nn.Module):
         self.num_lambda_layer = cfg.MODEL.CONDINST.MASK_BRANCH.NUM_LAMBDA_LAYER
         self.use_aspp = cfg.MODEL.CONDINST.MASK_BRANCH.USE_ASPP
         lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        self.v2 = cfg.MODEL.CONDINST.v2
 
         self.use_agg_feat    = cfg.MODEL.CONDINST.IUVHead.USE_AGG_FEATURES
         if self.use_agg_feat:
             self.in_features = cfg.MODEL.ROI_HEADS.IN_FEATURES
 
+        self.use_weight_std = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
+        self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
+
         feature_channels = {k: v.channels for k, v in input_shape.items()}
 
-        conv_block = conv_with_kaiming_uniform(norm, activation=True)
+        conv_block = conv_with_kaiming_uniform(norm, activation=True, use_weight_std=self.use_weight_std)
 
 
         self.use_decoder = False
@@ -192,10 +228,28 @@ class MaskBranch(nn.Module):
             #     )
             #     self.refine.append(layer)
             # else:
-            self.refine.append(conv_block(
-                feature_channels[in_feature],
-                agg_channels, 3, 1
-            ))
+            if self.v2 and idx>0 and in_feature not in ["p6","p7"]:
+                self.refine.append(nn.Sequential(*[
+                    conv_block(
+                        feature_channels[in_feature],
+                        agg_channels, 3, 1
+                    ),
+                    nn.Upsample(scale_factor=2**idx)
+                ]))
+
+                    # aligned_bilinear_layer(
+                    #     factor=2**idx
+                    # ),
+            else:
+                self.refine.append(
+                    conv_block(
+                        feature_channels[in_feature],
+                        agg_channels, 3, 1
+                    )
+                )
+        if self.use_eca:
+            self.eca = eca_layer(agg_channels, k_size=3)
+
 
         if self.use_aspp:
             self.ASPP = ASPP(agg_channels, [12, 24, 112], agg_channels)  # 6, 12, 56
@@ -216,12 +270,17 @@ class MaskBranch(nn.Module):
         #         channels, channels, 3, 2, 1
         #     )
         if "p2" == self.in_features[0]:
-            self.down_conv = conv_block(
-                agg_channels, channels, 3, 2, 1
-            )
-            tower = [conv_block(
-                    channels, channels, 3, 1
-                )]
+            if self.v2:
+                tower = [conv_block(
+                        agg_channels, channels, 3, 2, 1
+                    )]
+            else:
+                self.down_conv = conv_block(
+                    agg_channels, channels, 3, 2, 1
+                )
+                tower = [conv_block(
+                        channels, channels, 3, 1
+                    )]
         else:
             tower = [conv_block(
                     agg_channels, channels, 3, 1
@@ -234,6 +293,17 @@ class MaskBranch(nn.Module):
             channels, max(self.num_outputs, 1), 1
         ))
         self.add_module('tower', nn.Sequential(*tower))
+
+        # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
+        # if self.amp_enable:
+        #     self = self.half()
+        # ## debug
+        # # if self.amp_enable:
+        # # [p[1].data.dtype for p in self.named_parameters()]
+        # for p in self.named_parameters():
+        #     if p[1].data.dtype!=torch.float16:
+        #         print(p[1].data.dtype)
+        #         pdb.set_trace()
 
         # pdb.set_trace()
         # if self.sem_loss_on:
@@ -253,6 +323,13 @@ class MaskBranch(nn.Module):
         #     bias_value = -math.log((1 - prior_prob) / prior_prob)
         #     torch.nn.init.constant_(self.logits.bias, bias_value)
 
+    ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    def custom(self, module):
+        def custom_forward(*inputs):
+            inputs = module(inputs[0])
+            return inputs
+        return custom_forward
+
     def forward(self, features, gt_instances=None):
 
         # if self.use_decoder:
@@ -264,26 +341,41 @@ class MaskBranch(nn.Module):
             if i == 0:
                 x = self.refine[i](features[f])
             else:
-                x_p = self.refine[i](features[f])
-
-                target_h, target_w = x.size()[2:]
-                h, w = x_p.size()[2:]
-                assert target_h % h == 0
-                assert target_w % w == 0
-                factor_h, factor_w = target_h // h, target_w // w
-                assert factor_h == factor_w
-                x_p = aligned_bilinear(x_p, factor_h)
+                if self.v2:
+                    if self.checkpoint_grad_num>0:
+                        modules = [module for k, module in self.refine[i]._modules.items()]
+                        x_p = checkpoint.checkpoint_sequential(modules,1,features[f])
+                    else:
+                        x_p = self.refine[i](features[f])
+                else:
+                    x_p = self.refine[i](features[f])
+                    target_h, target_w = x.size()[2:]
+                    h, w = x_p.size()[2:]
+                    assert target_h % h == 0
+                    assert target_w % w == 0
+                    factor_h, factor_w = target_h // h, target_w // w
+                    assert factor_h == factor_w
+                    x_p = aligned_bilinear(x_p, factor_h)
                 x = x + x_p
         if self.use_aspp:
             x = self.ASPP(x)
         if self.num_lambda_layer>0:
             x = self.lambda_layer(x)
+        if self.use_eca:
+            x = self.eca(x)
         agg_feats = x
         # pdb.set_trace()
         # if "p1" == self.in_features[0]:
         #     mask_feats = self.tower(self.down_conv(x))
-        if "p2" == self.in_features[0]:
-            mask_feats = self.tower(self.down_conv(x))
+
+        if not self.v2:
+            if "p2" == self.in_features[0]:
+                x = self.down_conv(x)
+        
+        if self.checkpoint_grad_num>0:
+            # mask_feats = checkpoint.checkpoint(self.custom(self.tower), x)
+            modules = [module for k, module in self.tower._modules.items()]
+            mask_feats = checkpoint.checkpoint_sequential(modules,1,x)
         else:
             mask_feats = self.tower(x)
 

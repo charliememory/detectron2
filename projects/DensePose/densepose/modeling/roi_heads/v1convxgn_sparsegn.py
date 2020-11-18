@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Any
 import torch, pdb
 from torch import nn
 from torch.nn import functional as F
+import torch.utils.checkpoint as checkpoint
 
 from detectron2.config import CfgNode
 from detectron2.layers import Conv2d
@@ -40,7 +41,8 @@ class SparseInsGNBNIN(nn.Module):
         elif norm=="InsIN":
             self.norm = nn.InstanceNorm1d(out_channels)
 
-    def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any, ins_indices_len):
+    # def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any, ins_indices_len):
+    def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any):
         N, C = x.features.shape
         out_batch = []
         # for i in ins_ids:
@@ -64,7 +66,7 @@ class SparseInsGNBNIN(nn.Module):
                 x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
             except Exception as e:
                 print(e)
-                print((ins_indices_batch==i).nonzero())
+                # print((ins_indices_batch==i).nonzero())
                 # pdb.set_trace()
         return x
 
@@ -119,6 +121,58 @@ class SparseReLU(nn.Module):
         return spconv.SparseConvTensor(F.relu(x.features, inplace=self.inplace), x.indices, x.spatial_shape, x.batch_size)
 
 
+class Conv1dWS(nn.Conv1d):
+    def forward(self, input):
+        ## Weight Standardization
+        weight = self.weight
+        weight_mean = weight.mean(dim=1, keepdim=True).mean(dim=2,
+                                  keepdim=True)
+        weight = weight - weight_mean
+        std = weight.view(weight.size(0), -1).std(dim=1).view(-1, 1, 1, 1) + 1e-5
+        weight = weight / std.expand_as(weight)
+
+        if self.padding_mode != 'zeros':
+            return F.conv1d(F.pad(input, self._reversed_padding_repeated_twice, mode=self.padding_mode),
+                            weight, self.bias, self.stride,
+                            _single(0), self.dilation, self.groups)
+        return F.conv1d(input, weight, self.bias, self.stride,
+                        self.padding, self.dilation, self.groups)
+
+class SparseECA(nn.Module):
+    """Constructs a ECA module.
+    Args:
+        channel: Number of channels of the input feature map
+        k_size: Adaptive selection of kernel size
+    """
+    def __init__(self, channel, k_size=3, use_weight_std=False):
+        super(SparseECA, self).__init__()
+        # self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        if use_weight_std:
+            self.conv = Conv1dWS(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
+        else:
+            self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False) 
+        "TODO: change sigmoid to hard-swish?"
+        self.activation = nn.Sigmoid()
+
+    def forward(self, x: spconv.SparseConvTensor):
+        N, C = x.features.shape
+        batch_indices = x.indices[:,:1].expand_as(x.features)
+        out_batch = []
+        for i in range(x.batch_size):
+            # pdb.set_trace()
+            out = x.features[batch_indices==i].reshape([-1,1,C]).mean(dim=0).unsqueeze(dim=1) ## HWxBxC -> Bx1xC
+            out_batch.append(out)
+
+        out_batch = self.activation(self.conv(torch.cat(out_batch, dim=0))).squeeze(dim=1) ## Bx1xC -> BxC
+        for i in range(x.batch_size):
+            # pdb.set_trace()
+            x.features[batch_indices==i] = (x.features[batch_indices==i].reshape([-1,C]) * out_batch[i:i+1]).reshape(-1)
+        #     out_batch.append(out.permute([2,0,1]).reshape([-1,C]))
+        # return spconv.SparseConvTensor(torch.cat(out_batch, dim=0), 
+        #                 x.indices, x.spatial_shape, x.batch_size)
+        return x
+
+
 @ROI_DENSEPOSE_HEAD_REGISTRY.register()
 class DensePoseV1ConvXGNSparseGNHead(nn.Module):
     """
@@ -139,50 +193,84 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         kernel_size          = cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_KERNEL
         norm                 = cfg.MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM
         self.n_stacked_convs = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_STACKED_CONVS
-        self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
+        self.use_ins_gn      = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
+        self.use_weight_std  = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
+        # self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
+        self.use_eca = False
+        self.use_res         = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP
+        self.use_res_later   = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER
+        if self.use_res or self.use_res_later:
+            self.add_sparse = spconv.tables.AddTable()
+        self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         assert self.use_ins_gn
         # fmt: on
         # pad_size = kernel_size // 2
         # pad_size = 0
         n_channels = input_channels
-        conv = sparse_conv_with_kaiming_uniform(norm=None, activation=None, use_sep=False, 
-                            use_submconv=True, use_deconv=False)
-        cnt = 0
-        self.layers = []
-        for i in range(self.n_stacked_convs):
-            layer = conv(
-                n_channels,
-                hidden_dim,
-                kernel_size,
-                stride=1,
-                dilation=1,
-                indice_key="subm0",
-            )
-            # layer_name = self._get_layer_name(cnt)
-            self.add_module("layer{}".format(cnt), layer)
-            self.layers.append(layer)
-            cnt += 1
+        from torch.cuda.amp import autocast
+        with autocast():
+            conv = sparse_conv_with_kaiming_uniform(norm=None, activation=None, use_sep=False, 
+                                use_submconv=True, use_deconv=False, use_weight_std=self.use_weight_std)
+            cnt = 0
+            self.layers = []
+            for i in range(self.n_stacked_convs):
+                layer = conv(
+                    n_channels,
+                    hidden_dim,
+                    kernel_size,
+                    stride=1,
+                    dilation=1,
+                    indice_key="subm0",
+                )
+                # layer_name = self._get_layer_name(cnt)
+                self.add_module("layer{}".format(cnt), layer)
+                self.layers.append(layer)
+                # pdb.set_trace()
+                # [p[1].data.dtype for p in layer.half().named_parameters()]
+                cnt += 1
 
-            # if self.use_ins_gn:
-            #     layer = SparseInsGNBNIN(32, n_channels)
-            if norm in ["GN","BN"]:
-                layer = SparseGNBN(32, n_channels, norm)
-            elif norm in ["InsGN","InsBN","InsIN"]:
-                layer = SparseInsGNBNIN(32, n_channels, norm)
-            # layer_name = self._get_layer_name(cnt)
-            self.add_module("layer{}".format(cnt), layer)
-            self.layers.append(layer)
-            cnt += 1
+                if self.use_eca:
+                    layer = SparseECA(channel=hidden_dim)
+                    self.add_module("layer{}".format(cnt), layer)
+                    self.layers.append(layer)
+                    cnt += 1
 
-            layer = SparseReLU(inplace=True)
-            # layer_name = self._get_layer_name(cnt)
-            self.add_module("layer{}".format(cnt), layer)
-            self.layers.append(layer)
-            cnt += 1
+                # if self.use_ins_gn:
+                #     layer = SparseInsGNBNIN(32, n_channels)
+                if norm in ["GN","BN"]:
+                    layer = SparseGNBN(32, hidden_dim, norm)
+                elif norm in ["InsGN","InsBN","InsIN"]:
+                    layer = SparseInsGNBNIN(32, hidden_dim, norm)
+                # layer_name = self._get_layer_name(cnt)
+                self.add_module("layer{}".format(cnt), layer)
+                self.layers.append(layer)
+                cnt += 1
 
-            n_channels = hidden_dim
-        self.n_out_channels = n_channels
+                layer = SparseReLU(inplace=True)
+                # layer_name = self._get_layer_name(cnt)
+                self.add_module("layer{}".format(cnt), layer)
+                self.layers.append(layer)
+                cnt += 1
+
+                n_channels = hidden_dim
+            self.n_out_channels = n_channels
         # initialize_module_params(self)
+
+        # if self.amp_enable:
+        #     self = self.half()
+            # [p[1].data.dtype for p in self.named_parameters()]
+            # for layer in self.layers:
+            # for p in self.named_parameters():
+            #     if p[1].data.dtype!=torch.float16:
+            #         print(p[1].data.dtype)
+            #         pdb.set_trace()
+
+    # ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
+    # def custom(self, module):
+    #     def custom_forward(*inputs):
+    #         inputs = module(inputs[0])
+    #         return inputs
+    #     return custom_forward
 
     def forward(self, features: spconv.SparseConvTensor, ins_indices_batch: List[torch.Tensor], ins_indices_len):
         """
@@ -204,13 +292,50 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         ins_ids = torch.unique(ins_indices_batch)
         # ins_indices_batch = ins_indices_batch[...,None].expand_as(x.features)
         # pdb.set_trace()
-        for layer in self.layers:
+
+        # pdb.set_trace()
+        # if self.amp_enable:
+        #     x.features = x.features.half()
+
+        res = None
+        for idx, layer in enumerate(self.layers):
+            if self.use_res:
+                if idx==0:
+                    res = x
+                elif idx==5:
+                    x = self.add_sparse([x,res])
+                if idx==9:
+                    res = x
+                elif idx==14:
+                    x = self.add_sparse([x,res])
+                if idx==18:
+                    res = x
+                elif idx==23:
+                    x = self.add_sparse([x,res])
+            if self.use_res_later:
+                if idx==3:
+                    res = x
+                elif idx==8:
+                    x = self.add_sparse([x,res])
+                if idx==12:
+                    res = x
+                elif idx==17:
+                    x = self.add_sparse([x,res])
             # print(type(layer))
+            # if isinstance(layer, spconv.SubMConv2d):
+            #     if self.checkpoint_grad_num>0:
+            #         x = checkpoint.checkpoint(self.custom(layer), x)
+            #     else:
+            #         x = layer(x)
             if isinstance(layer,SparseInsGNBNIN):
-                x = layer(x, ins_indices_batch, ins_ids, ins_indices_len)
+                # x = layer(x, ins_indices_batch, ins_ids, ins_indices_len)
+                x = layer(x, ins_indices_batch, ins_ids)
             else:
+                # pdb.set_trace()
                 x = layer(x)
 
+
+        x.features = x.features #.float()
         output = x
         return output
 
