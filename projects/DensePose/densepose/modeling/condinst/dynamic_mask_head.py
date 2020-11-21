@@ -180,6 +180,9 @@ class DynamicMaskHead(nn.Module):
         # MASK_HEAD.CHANNELS
         self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
         self.disable_rel_coords = cfg.MODEL.CONDINST.MASK_HEAD.DISABLE_REL_COORDS
+        # self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
+        # if self.inference_global_siuv:
+        #     assert not self.training
 
         soi = cfg.MODEL.FCOS.SIZES_OF_INTEREST
         self.register_buffer("sizes_of_interest", torch.tensor(soi + [soi[-1] * 2]))
@@ -658,30 +661,31 @@ class DynamicMaskHead(nn.Module):
                     # if mask_out_bg_feats != "none":
                     #     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
                     # else:
-                    iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
-                    
+                    _, iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
+                    coarse_segm = s_logits
                     # iuv_logits = iuv_feats[:1,:75,:112,:112].expand_as(iuv_logits)
 
-                    if isinstance(iuv_logits, list):
-                        densepose_outputs = []
-                        for iuv in iuv_logits:
-                            densepose_outputs.append(DensePoseChartPredictorOutput(
-                                                                                coarse_segm=s_logits,
-                                                                                fine_segm=iuv[:,:25],
-                                                                                u=iuv[:,25:50],
-                                                                                v=iuv[:,50:75],
-                                                                                aux_supervision=iuv[:,75:],
-                                                                                stride=self.mask_out_stride,
-                                                                             ))
-                    else:
-                        densepose_outputs = DensePoseChartPredictorOutput(
-                                                                            coarse_segm=s_logits,
-                                                                            fine_segm=iuv_logits[:,:25],
-                                                                            u=iuv_logits[:,25:50],
-                                                                            v=iuv_logits[:,50:75],
-                                                                            aux_supervision=iuv_logits[:,75:],
-                                                                            stride=self.mask_out_stride,
-                                                                         )
+                    # if isinstance(iuv_logits, list):
+                    #     densepose_outputs = []
+                    #     for iuv in iuv_logits:
+                    #         densepose_outputs.append(DensePoseChartPredictorOutput(
+                    #                                                             coarse_segm=s_logits,
+                    #                                                             fine_segm=iuv[:,:25],
+                    #                                                             u=iuv[:,25:50],
+                    #                                                             v=iuv[:,50:75],
+                    #                                                             aux_supervision=iuv[:,75:],
+                    #                                                             stride=self.mask_out_stride,
+                    #                                                          ))
+                    # else:
+                    # pdb.set_trace()
+                    densepose_outputs = DensePoseChartPredictorOutput(
+                                                                        coarse_segm=coarse_segm,
+                                                                        fine_segm=iuv_logits[:,:25],
+                                                                        u=iuv_logits[:,25:50],
+                                                                        v=iuv_logits[:,50:75],
+                                                                        aux_supervision=iuv_logits[:,75:],
+                                                                        stride=self.mask_out_stride,
+                                                                     )
                     for i in range(len(gt_instances)):
                         gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
 
@@ -796,7 +800,7 @@ class DynamicMaskHead(nn.Module):
                 # fg_mask = self._torch_dilate(fg_mask, kernel_size=3)
                 #     iuv_logits = iuv_head_func(s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances)
                 # else:
-                iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, ins_mask_list=ins_mask_list)
+                coarse_segm, iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, ins_mask_list=ins_mask_list)
                 
                 # iuv_logits = iuv_head_func(s_logits, iuv_feats, mask_feat_stride, pred_instances)
 
@@ -804,19 +808,35 @@ class DynamicMaskHead(nn.Module):
                 # assert mask_feat_stride % self.mask_out_stride == 0
                 # s_logits = aligned_bilinear(s_logits, int(mask_feat_stride / self.mask_out_stride))
 
-                ## multiscale aggregation during infereance (average)
-                if isinstance(iuv_logits, list):
-                    H = max([iuv.shape[-2] for iuv in iuv_logits])
-                    W = max([iuv.shape[-1] for iuv in iuv_logits])
-                    iuv_logits = [F.interpolate(iuv, size=(H,W)) for iuv in iuv_logits]
-                    iuv_logits = torch.stack(iuv_logits, dim=0).mean(dim=0)
+                # ## multiscale aggregation during infereance (average)
+                # if isinstance(iuv_logits, list):
+                #     H = max([iuv.shape[-2] for iuv in iuv_logits])
+                #     W = max([iuv.shape[-1] for iuv in iuv_logits])
+                #     iuv_logits = [F.interpolate(iuv, size=(H,W)) for iuv in iuv_logits]
+                #     iuv_logits = torch.stack(iuv_logits, dim=0).mean(dim=0)
 
+                # if self.inference_global_siuv:
                 densepose_outputs = DensePoseChartPredictorOutput(
-                                                                    coarse_segm=iuv_logits[:,:2],
-                                                                    fine_segm=iuv_logits[:,2:27],
-                                                                    u=iuv_logits[:,27:52],
-                                                                    v=iuv_logits[:,52:77],
-                                                                 )
+                                                                    coarse_segm=coarse_segm,
+                                                                    fine_segm=iuv_logits[:,:25],
+                                                                    u=iuv_logits[:,25:50],
+                                                                    v=iuv_logits[:,50:75],
+                                                             )
+                # else:
+                #     densepose_outputs = DensePoseChartPredictorOutput(
+                #                                                         coarse_segm=iuv_logits[:,:2],
+                #                                                         fine_segm=iuv_logits[:,2:27],
+                #                                                         u=iuv_logits[:,27:52],
+                #                                                         v=iuv_logits[:,52:77],
+                #                                                      )
+
+                # pdb.set_trace()
+                # import imageio
+                # ss = iuv_logits[0,:2]
+                # imageio.imwrite("tmp/coarse_segm_our_argmax.png", torch.argmax(ss,dim=0).detach().cpu().numpy())
+                # imageio.imwrite("tmp/coarse_segm_our_ch0.png", ss[0].detach().cpu().numpy())
+                # imageio.imwrite("tmp/coarse_segm_our_ch1.png", ss[1].detach().cpu().numpy())
+
                 pred_instances.set('pred_densepose', densepose_outputs)
                 # pred_instances = convert_condInst_to_densepose_inference(densepose_outputs, 
                 #                     pred_instances, size=(256,256))

@@ -151,6 +151,7 @@ class CoordGlobalIUVPooler2Head(nn.Module):
         self.use_rel_coords = cfg.MODEL.CONDINST.IUVHead.REL_COORDS
         self.use_abs_coords = cfg.MODEL.CONDINST.IUVHead.ABS_COORDS
         self.pos_emb_num_freqs = cfg.MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS
+        self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
         self.use_pos_emb = self.pos_emb_num_freqs>0
         if self.use_pos_emb:
             self.position_embedder, self.position_emb_dim = get_embedder(multires=self.pos_emb_num_freqs, input_dims=2)
@@ -199,30 +200,47 @@ class CoordGlobalIUVPooler2Head(nn.Module):
 
         features = [fpn_features[f] for f in self.in_features]
 
+        if self.inference_global_siuv:
+            assert not self.training
+
         if self.training:
             features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
             proposal_boxes = [x.gt_boxes for x in gt_instances]
             features_dp = self.densepose_pooler(features, proposal_boxes)
-            iuv_logit = features_dp
-            iuv_logit_global = features[0]
+            iuv_logits = features_dp
+            # iuv_logit_global = features[0]
+            return None, iuv_logits
         else:
             features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
-            # if isinstance(instances,Instances):
-            proposal_boxes = [instances.pred_boxes]
-            # else:
-            #     proposal_boxes = [x.pred_boxes for x in instances]
-            features_dp = self.densepose_pooler(features, proposal_boxes)
-            # pdb.set_trace()
-            s_logit_list = []
-            for idx in range(s_logits.shape[0]):
-                s_logit = self.densepose_pooler([s_logits[idx:idx+1]], [proposal_boxes[0][idx:idx+1]])
-                s_logit_list.append(s_logit)
-            iuv_logit = torch.cat([torch.cat(s_logit_list,dim=0), features_dp], dim=1)
-            iuv_logit_global = features[0]
-            # print(instances.pred_boxes)
+
+            if self.inference_global_siuv:
+                iuv_logits = features[0]
+                coarse_segm = s_logits
+            else:
+                # if isinstance(instances,Instances):
+                proposal_boxes = [instances.pred_boxes]
+                # else:
+                #     proposal_boxes = [x.pred_boxes for x in instances]
+                features_dp = self.densepose_pooler(features, proposal_boxes)
+                # pdb.set_trace()
+                s_logit_list = []
+                for idx in range(s_logits.shape[0]):
+                    s_logit = self.densepose_pooler([s_logits[idx:idx+1]], [proposal_boxes[0][idx:idx+1]])
+                    s_logit_list.append(s_logit)
+                coarse_segm = torch.cat(s_logit_list,dim=0)
+                # iuv_logit = torch.cat([torch.cat(s_logit_list,dim=0), features_dp], dim=1)
+                # iuv_logit_global = features[0]
+                iuv_logits = features_dp
+                # print(instances.pred_boxes)
+        # else:
+        #     features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
+        #     proposal_boxes = [instances.pred_boxes]
+        #     features_dp = self.densepose_pooler(features, proposal_boxes)
+        #     iuv_logit = features_dp
+        #     iuv_logit_global = features[0]
 
 
-        return iuv_logit
+            return coarse_segm, iuv_logits
 
 
 

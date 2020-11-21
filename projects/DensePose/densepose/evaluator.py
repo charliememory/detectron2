@@ -23,7 +23,7 @@ from detectron2.utils.logger import create_small_table
 from .converters import ToChartResultConverter, ToMaskConverter
 from .densepose_coco_evaluation import DensePoseCocoEval, DensePoseEvalMode
 from .structures import quantize_densepose_chart_result
-
+import pdb
 
 class DensePoseCOCOEvaluator(DatasetEvaluator):
     def __init__(self, dataset_name, distributed, output_dir=None):

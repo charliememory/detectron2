@@ -13,6 +13,8 @@ import numpy as np
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import CfgNode
 from detectron2.engine import DefaultTrainer
+# from detectron2.engine import DefaultTrainer
+from .defaults import DefaultTrainer
 from detectron2.evaluation import COCOEvaluator, DatasetEvaluators
 from detectron2.utils.events import EventWriter, get_event_storage
 

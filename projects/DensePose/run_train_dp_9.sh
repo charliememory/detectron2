@@ -106,19 +106,19 @@ source ~/.bashrc_liqianma
 #     # MODEL.FCOS.INFERENCE_TH_TRAIN 0.05 \
 #     # MODEL.FCOS.INFERENCE_TH_TEST 0.05 \
 
-cd ~/workspace/Gitlab/spconv/
-rm -rf build
-python setup.py bdist_wheel
-cd ./dist
-pip uninstall spconv -y
-pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
-cd ~/workspace/Gitlab/detectron2/projects/DensePose
+# cd ~/workspace/Gitlab/spconv/
+# rm -rf build
+# python setup.py bdist_wheel
+# cd ./dist
+# pip uninstall spconv -y
+# pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
+# cd ~/workspace/Gitlab/detectron2/projects/DensePose
 
 cfg_name='densepose_CondInst_R_50_s1x'
 CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
     --resume \
     SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 \
-    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrue384_GTinsDilated3_fewProposal_fewLayer  \
+    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_GTinsDilated3_tmp  \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
     SOLVER.CHECKPOINT_PERIOD 5000 \
@@ -126,7 +126,7 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 320 \
+    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
@@ -135,11 +135,5 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.IUVHead.GT_INSTANCES True \
     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-    MODEL.CONDINST.MASK_BRANCH.NUM_CONVS 3\
-    MODEL.CONDINST.MAX_PROPOSALS 160 \
-    MODEL.FCOS.PRE_NMS_TOPK_TRAIN 160 \
-    MODEL.FCOS.PRE_NMS_TOPK_TEST 160 \
-    MODEL.FCOS.POST_NMS_TOPK_TRAIN 32 \
-    MODEL.FCOS.POST_NMS_TOPK_TEST 32 \
-    # MODEL.FCOS.INFERENCE_TH_TRAIN 0.05 \
-    # MODEL.FCOS.INFERENCE_TH_TEST 0.05 \
+    MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+    MODEL.CONDINST.MASK_BRANCH.RESIDUAL_INPUT True \

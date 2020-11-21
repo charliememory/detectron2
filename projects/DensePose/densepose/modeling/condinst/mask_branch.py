@@ -195,6 +195,8 @@ class MaskBranch(nn.Module):
         lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.v2 = cfg.MODEL.CONDINST.v2
+        self.use_res_input   = cfg.MODEL.CONDINST.MASK_BRANCH.RESIDUAL_INPUT
+        self.use_res_after_relu   = cfg.MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU
 
         self.use_agg_feat    = cfg.MODEL.CONDINST.IUVHead.USE_AGG_FEATURES
         if self.use_agg_feat:
@@ -292,7 +294,12 @@ class MaskBranch(nn.Module):
         tower.append(nn.Conv2d(
             channels, max(self.num_outputs, 1), 1
         ))
-        self.add_module('tower', nn.Sequential(*tower))
+        if self.use_res_input or self.use_res_after_relu:
+            for idx, layer in enumerate(tower):
+                self.add_module('tower_layer{}'.format(idx), layer)
+            self.tower = tower
+        else:
+            self.add_module('tower', nn.Sequential(*tower))
 
         # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
         # if self.amp_enable:
@@ -372,12 +379,38 @@ class MaskBranch(nn.Module):
             if "p2" == self.in_features[0]:
                 x = self.down_conv(x)
         
-        if self.checkpoint_grad_num>0:
-            # mask_feats = checkpoint.checkpoint(self.custom(self.tower), x)
-            modules = [module for k, module in self.tower._modules.items()]
-            mask_feats = checkpoint.checkpoint_sequential(modules,1,x)
+        # if self.checkpoint_grad_num>0:
+        #     # mask_feats = checkpoint.checkpoint(self.custom(self.tower), x)
+        #     modules = [module for k, module in self.tower._modules.items()]
+        #     mask_feats = checkpoint.checkpoint_sequential(modules,1,x)
+        # else:
+        #     mask_feats = self.tower(x)
+
+        if self.use_res_after_relu:
+            res = None
+            for idx, layer in enumerate(self.tower):
+                if idx==1:
+                    res = x
+                elif idx==3:
+                    x = x + res
+                x = layer(x)
+            mask_feats = x
+        elif self.use_res_input:
+            res = None
+            for idx, layer in enumerate(self.tower):
+                if idx==0:
+                    res = x
+                elif idx==2:
+                    x = x + res
+                if idx==3:
+                    res = x
+                elif idx==4:
+                    x = x + res
+                x = layer(x)
+            mask_feats = x
         else:
             mask_feats = self.tower(x)
+
 
         if self.num_outputs == 0:
             mask_feats = mask_feats[:, :self.num_outputs]

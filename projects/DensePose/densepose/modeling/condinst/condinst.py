@@ -15,6 +15,7 @@ from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 from detectron2.structures.instances import Instances
 from detectron2.structures.masks import PolygonMasks, polygons_to_bitmask
 from detectron2.modeling.roi_heads import select_foreground_proposals
+from detectron2.modeling.postprocessing import detector_postprocess
 
 from .dynamic_mask_head import build_dynamic_mask_head
 from .mask_branch import build_mask_branch
@@ -145,6 +146,7 @@ class CondInst(nn.Module):
         #     assert cfg.MODEL.FCOS.YIELD_PROPOSAL==True
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.finetune_iuvhead_only = cfg.MODEL.CONDINST.FINETUNE_IUVHead_ONLY
+        self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
 
 
         # ## original ROI based densepose head
@@ -361,7 +363,8 @@ class CondInst(nn.Module):
                 # "TODO add densepose inference"
                 assert len(batched_inputs)==1
                 imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-                densepose_instances, densepose_outputs = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
+                densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
+                
                 # pdb.set_trace()
                 # import imageio
                 # im = batched_inputs[0]["image"]/255.
@@ -380,7 +383,7 @@ class CondInst(nn.Module):
                 # import imageio
                 # im = batched_inputs[0]["image"]/255.
                 # H, W = im.shape[-2:]
-                # S = densepose_outputs.coarse_segm.detach().cpu()
+                # S = densepose_instances[0].pred_densepose.coarse_segm.detach().cpu()
                 # ins_mask = F.interpolate(torch.sum(S,dim=0,keepdim=True), size=(H,W))[0,1:2]
                 # # S = F.interpolate(S, size=(H,W))
                 # # S = (S[:,0:1]<S[:,1:2]).float()
@@ -410,27 +413,40 @@ class CondInst(nn.Module):
 
                 #     densepose_instances, _ = self.roi_heads(images, features, proposals, None)
 
+                if self.inference_global_siuv:
+                    padded_im_h, padded_im_w = images.tensor.size()[-2:]
+                    processed_results = []
+                    for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
+                        height = input_per_image.get("height", image_size[0])
+                        width = input_per_image.get("width", image_size[1])
 
-                return densepose_instances
+                        instances_per_im = densepose_instances[im_id]
+                        instances_per_im = self.postprocess_global_siuv(
+                            instances_per_im, height, width,
+                            padded_im_h, padded_im_w
+                        )
+
+                        processed_results.append({
+                            "instances": instances_per_im
+                        })
 
 
-                # padded_im_h, padded_im_w = images.tensor.size()[-2:]
-                # processed_results = []
-                # for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
-                #     height = input_per_image.get("height", image_size[0])
-                #     width = input_per_image.get("width", image_size[1])
+                else:
 
-                #     instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
-                #     instances_per_im = self.postprocess(
-                #         instances_per_im, height, width,
-                #         padded_im_h, padded_im_w
-                #     )
+                    processed_results = []
+                    for results_per_image, input_per_image, image_size in zip(
+                        densepose_instances, batched_inputs, images.image_sizes
+                    ):
+                        height = input_per_image.get("height", image_size[0])
+                        width = input_per_image.get("width", image_size[1])
+                        results_per_image._image_size = (height, width)
+                        processed_results.append({"instances": results_per_image})
 
-                #     processed_results.append({
-                #         "instances": instances_per_im
-                #     })
+                torch.cuda.empty_cache()
+                return processed_results
 
-                # return processed_results
+
+
 
     def _forward_mask_heads_train(self, proposals, fpn_features, mask_feats, iuv_feats, gt_instances: List[Instances]):
         # prepare the inputs for mask heads
@@ -512,11 +528,20 @@ class CondInst(nn.Module):
         # V = densepose_outputs.v[:1]
         # siuv_logit = torch.cat([S,I,U,V], dim=1)
         # iuv = SIUV_logit_to_iuv_batch(siuv_logit, norm=False, use_numpy=False)
+        densepose_instances = [densepose_instances]
+        densepose_inference(densepose_outputs, densepose_instances)
+        return densepose_instances
 
+        # return [{'instances': densepose_instances}]
 
-        return [{'instances': densepose_instances}], densepose_outputs
+        # if do_postprocess:
+        #     return GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+        # else:
+        #     return results
+        # return [{'instances': densepose_instances}], densepose_outputs
         # return [densepose_instances], densepose_outputs
         # return {'instances': densepose_instances}, densepose_outputs
+
 
     def _forward_mask_heads_test_global(self, proposals, mask_feats, iuv_logits, imgsize):
         # prepare the inputs for mask heads
@@ -582,7 +607,42 @@ class CondInst(nn.Module):
                 per_im_gt_inst.gt_bitmasks = bitmasks
                 per_im_gt_inst.gt_bitmasks_full = bitmasks_full
 
-    def postprocess(self, results, output_height, output_width, padded_im_h, padded_im_w, mask_threshold=0.5):
+    # @staticmethod
+    # def _postprocess(instances, batched_inputs, image_sizes):
+    #     """
+    #     Rescale the output instances to the target size.
+    #     """
+    #     # note: private function; subject to changes
+    #     processed_results = []
+    #     for results_per_image, input_per_image, image_size in zip(
+    #         instances, batched_inputs, image_sizes
+    #     ):
+    #         height = input_per_image.get("height", image_size[0])
+    #         width = input_per_image.get("width", image_size[1])
+    #         results_per_image._image_size = (height, width)
+    #         processed_results.append({"instances": results_per_image})
+    #         # pdb.set_trace()
+    #         # r = detector_postprocess(results_per_image, height, width)
+    #         # processed_results.append({"instances": r})
+    #     return processed_results
+
+# padded_im_h, padded_im_w = images.tensor.size()[-2:]
+# processed_results = []
+# for im_id, (input_per_image, image_size) in enumerate(zip(batched_inputs, images.image_sizes)):
+#     height = input_per_image.get("height", image_size[0])
+#     width = input_per_image.get("width", image_size[1])
+
+#     instances_per_im = pred_instances_w_masks[pred_instances_w_masks.im_inds == im_id]
+#     instances_per_im = self.postprocess(
+#         instances_per_im, height, width,
+#         padded_im_h, padded_im_w
+#     )
+
+#     processed_results.append({
+#         "instances": instances_per_im
+#     })
+
+    def postprocess_global_siuv(self, results, output_height, output_width, padded_im_h, padded_im_w, mask_threshold=0.5, remove_empty=True):
         """
         Resize the output instances.
         The input images are often resized when entering an object detector.
@@ -601,6 +661,7 @@ class CondInst(nn.Module):
         scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
         resized_im_h, resized_im_w = results.image_size
         results = Instances((output_height, output_width), **results.get_fields())
+        # results._image_size = (output_height, output_width)
 
         if results.has("pred_boxes"):
             output_boxes = results.pred_boxes
@@ -610,24 +671,36 @@ class CondInst(nn.Module):
         output_boxes.scale(scale_x, scale_y)
         output_boxes.clip(results.image_size)
 
-        results = results[output_boxes.nonempty()]
+        if remove_empty:
+            # valid_idxs = output_boxes.nonempty()
+            valid_idxs = results.pred_densepose.coarse_segm[:,1:2].sum(dim=[1,2,3]) > 0
+            # pdb.set_trace()
+            pred_densepose = results.pred_densepose
+            pred_densepose.coarse_segm = pred_densepose.coarse_segm[valid_idxs]
+            results.remove("pred_densepose")
+            results = results[valid_idxs]
+            results.set("pred_densepose", pred_densepose)
 
-        if results.has("pred_global_masks"):
-            mask_h, mask_w = results.pred_global_masks.size()[-2:]
+        ## resize global siuv
+        for name in ["coarse_segm", "fine_segm", "u", "v"]:
+        # if results.has("pred_global_masks"):
+            mask = getattr(results.pred_densepose, name)
+            mask_h, mask_w = mask.size()[-2:]
             factor_h = padded_im_h // mask_h
             factor_w = padded_im_w // mask_w
             assert factor_h == factor_w
             factor = factor_h
-            pred_global_masks = aligned_bilinear(
-                results.pred_global_masks, factor
+            mask = aligned_bilinear(
+                mask, factor
             )
-            pred_global_masks = pred_global_masks[:, :, :resized_im_h, :resized_im_w]
-            pred_global_masks = F.interpolate(
-                pred_global_masks,
+            mask = mask[:, :, :resized_im_h, :resized_im_w]
+            mask = F.interpolate(
+                mask,
                 size=(output_height, output_width),
                 mode="bilinear", align_corners=False
             )
-            pred_global_masks = pred_global_masks[:, 0, :, :]
-            results.pred_masks = (pred_global_masks > mask_threshold).float()
+            # pred_global_masks = pred_global_masks[:, 0, :, :]
+            # results.pred_masks = (pred_global_masks > mask_threshold).float()
+            setattr(results.pred_densepose, name, mask)
 
         return results

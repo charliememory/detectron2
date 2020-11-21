@@ -197,10 +197,10 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         self.use_weight_std  = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
         # self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
         self.use_eca = False
-        self.use_res         = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP
+        self.use_res_input    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_INPUT
+        self.use_res_after_relu    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_AFTER_RELU
         self.use_res_later   = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER
-        if self.use_res or self.use_res_later:
-            self.add_sparse = spconv.tables.AddTable()
+        self.add_sparse = spconv.tables.AddTable()
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         assert self.use_ins_gn
         # fmt: on
@@ -299,19 +299,6 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
 
         res = None
         for idx, layer in enumerate(self.layers):
-            if self.use_res:
-                if idx==0:
-                    res = x
-                elif idx==5:
-                    x = self.add_sparse([x,res])
-                if idx==9:
-                    res = x
-                elif idx==14:
-                    x = self.add_sparse([x,res])
-                if idx==18:
-                    res = x
-                elif idx==23:
-                    x = self.add_sparse([x,res])
             if self.use_res_later:
                 if idx==3:
                     res = x
@@ -321,6 +308,18 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                     res = x
                 elif idx==17:
                     x = self.add_sparse([x,res])
+            if self.use_res_after_relu:
+                if idx==3:
+                    res = x
+                elif idx==9:
+                    x = self.add_sparse([x,res])
+                if idx==12:
+                    res = x
+                elif idx==18:
+                    x = self.add_sparse([x,res])
+            if self.use_res_input:
+                if idx in [0,9,18]:
+                    res = x
             # print(type(layer))
             # if isinstance(layer, spconv.SubMConv2d):
             #     if self.checkpoint_grad_num>0:
@@ -333,6 +332,11 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
             else:
                 # pdb.set_trace()
                 x = layer(x)
+
+            if self.use_res_input:
+                if idx in [5,14,23]:
+                    x = self.add_sparse([x,res])
+
 
 
         x.features = x.features #.float()

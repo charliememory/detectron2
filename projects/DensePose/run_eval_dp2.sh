@@ -82,18 +82,43 @@ source ~/.bashrc_liqianma
 #     # > ./output/${mode_name}/eval_log.txt
 
 
-cd ~/workspace/Gitlab/spconv/
-rm -rf build
-python setup.py bdist_wheel
-cd ./dist
-pip uninstall spconv -y
-pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
-cd ~/workspace/Gitlab/detectron2/projects/DensePose
+# cd ~/workspace/Gitlab/spconv/
+# rm -rf build
+# python setup.py bdist_wheel
+# cd ./dist
+# pip uninstall spconv -y
+# pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
+# cd ~/workspace/Gitlab/detectron2/projects/DensePose
 
+
+# # 49999
+# cfg_name='densepose_CondInst_R_50_s1x'
+# mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrue_GTinsDilated3
+# # CUDA_VISIBLE_DEVICES=6 
+# python train_net.py --config-file configs/${cfg_name}.yaml \
+#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
+#     OUTPUT_DIR ./output/${mode_name} \
+#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+#     SOLVER.CHECKPOINT_PERIOD 5000 \
+#     DATALOADER.NUM_WORKERS 2 \
+#     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+#     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+#     MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+#     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+#     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+#     MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+#     MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+#     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+#     MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+#     # > ./output/${mode_name}/eval_log.txt
 
 # 49999
-cfg_name='densepose_CondInst_R_50_s1x'
-mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrue_GTinsDilated3
+cfg_name='densepose_CondInst_R_50_s1x_ft'
+mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrue_GTinsDilated3_ftIUVheadOnly
 # CUDA_VISIBLE_DEVICES=6 
 python train_net.py --config-file configs/${cfg_name}.yaml \
     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
@@ -115,3 +140,5 @@ python train_net.py --config-file configs/${cfg_name}.yaml \
     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
     MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
     # > ./output/${mode_name}/eval_log.txt
+    # MODEL.CONDINST.FINETUNE_IUVHead_ONLY True \
+

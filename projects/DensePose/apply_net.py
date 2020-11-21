@@ -18,7 +18,7 @@ from detectron2.structures.instances import Instances
 from detectron2.utils.logger import setup_logger
 
 # from densepose import add_densepose_config, add_hrnet_config
-from densepose.config import get_cfg, add_densepose_config
+from densepose.config import get_cfg, add_densepose_config, add_hrnet_config
 from densepose.utils.logger import verbosity_to_level
 from densepose.vis.base import CompoundVisualizer
 from densepose.vis.bounding_box import ScoredBoundingBoxVisualizer
@@ -81,7 +81,6 @@ class InferenceAction(Action):
         cfg = cls.setup_config(args.cfg, args.model, args, opts)
         logger.info(f"Loading model from {args.model}")
         predictor = DefaultPredictor(cfg)
-        # pdb.set_trace()
         logger.info(f"Loading data from {args.input}")
         file_list = cls._get_input_file_list(args.input)
         if len(file_list) == 0:
@@ -89,7 +88,6 @@ class InferenceAction(Action):
             return
         context = cls.create_context(args)
         # cnt = 0
-        # pdb.set_trace()
         for file_name in tqdm.tqdm(file_list):
             # cnt += 1
             # if cnt<50:
@@ -97,8 +95,29 @@ class InferenceAction(Action):
             img = read_image(file_name, format="BGR")  # predictor expects BGR image.
             with torch.no_grad():
                 outputs = predictor(img)["instances"]
+                # pdb.set_trace()
+                if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
+                    outputs = cls.seperate_global_siuv(outputs)
+
                 cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
+                
+            torch.cuda.empty_cache()
         cls.postexecute(context)
+
+    ## MLQ added
+    @classmethod
+    def seperate_global_siuv(cls: type, outputs: Instances):
+        "TODO"
+        N_ins = outputs.pred_boxes.tensor.shape[0]
+        assert N_ins==outputs.pred_densepose.coarse_segm.shape[0]
+        device = outputs.pred_boxes.tensor.device
+        H, W = outputs.image_size
+        # print(N_ins)
+        outputs.pred_boxes.tensor = torch.tensor([[0,0,W,H]], device=device).repeat(N_ins, 1)
+        outputs.pred_densepose.fine_segm = outputs.pred_densepose.fine_segm.repeat(N_ins, 1, 1, 1)
+        outputs.pred_densepose.u = outputs.pred_densepose.u.repeat(N_ins, 1, 1, 1)
+        outputs.pred_densepose.v = outputs.pred_densepose.v.repeat(N_ins, 1, 1, 1)
+        return outputs
 
     # @classmethod
     # def execute(cls: type, args: argparse.Namespace, multi_frames=True):

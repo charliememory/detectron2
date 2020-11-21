@@ -254,6 +254,9 @@ class CoordGlobalIUVSparsePooler2Head(CoordGlobalIUVPooler2Head):
         self.use_abs_coords = cfg.MODEL.CONDINST.IUVHead.ABS_COORDS
         self.pos_emb_num_freqs = cfg.MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
+        # if self.inference_global_siuv:
+        #     assert not self.training
         self.use_pos_emb = self.pos_emb_num_freqs>0
         if self.use_pos_emb:
             self.position_embedder, self.position_emb_dim = get_embedder(multires=self.pos_emb_num_freqs, input_dims=2)

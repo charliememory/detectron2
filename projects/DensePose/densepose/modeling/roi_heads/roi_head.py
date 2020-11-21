@@ -177,6 +177,13 @@ class DensePoseROIHeads(StandardROIHeads):
             else:
                 densepose_predictor_outputs = None
 
+            # pdb.set_trace()
+            # import imageio
+            # ss = densepose_predictor_outputs.coarse_segm[0]
+            # imageio.imwrite("tmp/coarse_segm_dp_argmax.png", torch.argmax(ss,dim=0).detach().cpu().numpy())
+            # imageio.imwrite("tmp/coarse_segm_dp_ch0.png", ss[0].detach().cpu().numpy())
+            # imageio.imwrite("tmp/coarse_segm_dp_ch1.png", ss[1].detach().cpu().numpy())
+
             densepose_inference(densepose_predictor_outputs, instances)
             return instances
 
@@ -407,5 +414,6 @@ class DensePoseROIHeads(StandardROIHeads):
         instances = super().forward_with_given_boxes(features, instances)
         instances = self._forward_densepose(features, instances) ## original inference
         # instances = self._forward_densepose_smooth_save(features, instances) ## MLQ modified
+        # pdb.set_trace()
 
         return instances
