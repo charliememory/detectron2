@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+import numpy as np
 import contextlib
 import io
 import logging
@@ -10,7 +11,9 @@ from fvcore.common.file_io import PathManager
 from fvcore.common.timer import Timer
 
 from detectron2.data import DatasetCatalog, MetadataCatalog
+from detectron2.data.datasets import builtin_meta
 from detectron2.structures import BoxMode
+
 
 from ..utils import maybe_prepend_base_path
 
@@ -103,6 +106,9 @@ def get_metadata(base_path: Optional[os.PathLike]) -> Dict[str, Any]:
         "densepose_smpl_subdiv_transform": maybe_prepend_base_path(
             base_path, "SMPL_SUBDIV_TRANSFORM.mat"
         ),
+        "keypoint_names": builtin_meta.COCO_PERSON_KEYPOINT_NAMES,
+        "keypoint_flip_map": builtin_meta.COCO_PERSON_KEYPOINT_FLIP_MAP,
+        "keypoint_connection_rules": builtin_meta.KEYPOINT_CONNECTION_RULES,
     }
     return meta
 
@@ -179,6 +185,8 @@ def _maybe_add_keypoints(obj: Dict[str, Any], ann_dict: Dict[str, Any]):
             # add 0.5 to convert to floating point coordinates.
             keypts[idx] = v + 0.5
     obj["keypoints"] = keypts
+    # pdb.set_trace()
+
 
 
 def _maybe_add_densepose(obj: Dict[str, Any], ann_dict: Dict[str, Any]):

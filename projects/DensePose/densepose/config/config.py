@@ -103,6 +103,8 @@ def add_densepose_head_config(cfg: CN):
     _C.MODEL.ROI_DENSEPOSE_HEAD.INDEX_WEIGHTS = 5.0
     # Loss weights for surface parts. (24 Parts)
     _C.MODEL.ROI_DENSEPOSE_HEAD.PART_WEIGHTS = 1.0
+    _C.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_LOSS = False
+    _C.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_GAMMA = 1.0
     # Loss weights for UV regression.
     _C.MODEL.ROI_DENSEPOSE_HEAD.POINT_REGRESSION_WEIGHTS = 0.01
     # Coarse segmentation is trained using instance segmentation task data

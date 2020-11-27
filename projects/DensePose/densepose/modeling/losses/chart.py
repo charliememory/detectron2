@@ -10,6 +10,7 @@ from detectron2.structures import Instances
 
 from .registry import DENSEPOSE_LOSS_REGISTRY
 from .utils import BilinearInterpolationHelper, LossDict, SingleTensorsHelper, resample_data
+from .utils import dice_coefficient, FocalLoss
 
 
 @dataclass
@@ -66,6 +67,7 @@ def extract_data_for_mask_loss_from_matches(
         ).to(device=estimated_segm.device)
         masks_gt.append(gt_masks_per_image)
         offset += n_i
+
     if masks_gt:
         data.masks_est = estimated_segm
         data.masks_gt = torch.cat(masks_gt, dim=0)
@@ -110,10 +112,15 @@ class DensePoseChartLoss:
         self.heatmap_size = cfg.MODEL.ROI_DENSEPOSE_HEAD.HEATMAP_SIZE
         self.w_points     = cfg.MODEL.ROI_DENSEPOSE_HEAD.POINT_REGRESSION_WEIGHTS
         self.w_part       = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_WEIGHTS
+        self.use_part_focal_loss = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_LOSS
         self.w_segm       = cfg.MODEL.ROI_DENSEPOSE_HEAD.INDEX_WEIGHTS
         self.n_segm_chan  = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
         # fmt: on
         self.segm_trained_by_masks = cfg.MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS
+
+        if self.use_part_focal_loss:
+            gamma = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_GAMMA
+            self.focal_loss = FocalLoss(gamma=gamma, alpha=None, size_average=True)
 
     def __call__(
         self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any
@@ -197,6 +204,7 @@ class DensePoseChartLoss:
             )
         if (mask_loss_data.masks_gt is None) or (mask_loss_data.masks_est is None):
             return self.produce_fake_mask_losses(densepose_predictor_outputs)
+
         return {
             "loss_densepose_S": F.cross_entropy(
                 mask_loss_data.masks_est, mask_loss_data.masks_gt.long()

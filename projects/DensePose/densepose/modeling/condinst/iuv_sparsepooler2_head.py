@@ -151,7 +151,7 @@ class DecoderSparse(nn.Module):
 
     def forward(self, features: List[torch.Tensor], iuv_feats: torch.Tensor, rel_coord: torch.Tensor, 
                 abs_coord: torch.Tensor, fg_mask: torch.Tensor, ins_mask_list: List[torch.Tensor]):
-        assert fg_mask.min()==0, "the fg_mask is all 1"
+        # assert fg_mask.min()==0, "the fg_mask is all 1"
         if not self.use_agg_feat:
             for i, _ in enumerate(self.in_features):
                 if i == 0:
@@ -164,13 +164,15 @@ class DecoderSparse(nn.Module):
             x = torch.cat([x,rel_coord], dim=1)
         if abs_coord is not None:
             x = torch.cat([x,abs_coord], dim=1)
-
         # pdb.set_trace()
+        # if skeleton_feats is not None:
+        #     x = torch.cat([x,skeleton_feats], dim=1)
+
         if rel_coord is not None or abs_coord is not None:
-            if isinstance(self.comb_pe_conv, LambdaLayer):
-                x = self.comb_pe_conv(x)
-            else:
-                x = self.comb_pe_conv(x)
+            # if isinstance(self.comb_pe_conv, LambdaLayer):
+            #     x = self.comb_pe_conv(x)
+            # else:
+            x = self.comb_pe_conv(x)
 
         ## dense to sparse
         N, C, H, W = x.shape
@@ -182,7 +184,6 @@ class DecoderSparse(nn.Module):
         ins_cnt = 0
         for n in range(N):
             m = fg_mask[n:n+1]
-            # pdb.set_trace()
             x_indices = coord[0][m[0,0]>0]
             y_indices = coord[1][m[0,0]>0]
             if self.use_ins_gn:
@@ -222,6 +223,7 @@ class DecoderSparse(nn.Module):
         #     x = spconv.SparseConvTensor(sparse_feat_batch, sparse_coord_batch, (H,W), ins_cnt)
         # else:
         x = spconv.SparseConvTensor(sparse_feat_batch, sparse_coord_batch, (H,W), N)
+        # pdb.set_trace()
         if self.use_ins_gn:
             ins_indices_batch = torch.cat(ins_indices_batch,dim=0)
             ins_indices_len = torch.cat(ins_indices_len,dim=0)
@@ -254,7 +256,9 @@ class CoordGlobalIUVSparsePooler2Head(CoordGlobalIUVPooler2Head):
         self.use_abs_coords = cfg.MODEL.CONDINST.IUVHead.ABS_COORDS
         self.pos_emb_num_freqs = cfg.MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
         self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
+        self.add_skeleton_feat = cfg.MODEL.CONDINST.IUVHead.SKELETON_FEATURES
         # if self.inference_global_siuv:
         #     assert not self.training
         self.use_pos_emb = self.pos_emb_num_freqs>0
@@ -265,6 +269,9 @@ class CoordGlobalIUVSparsePooler2Head(CoordGlobalIUVPooler2Head):
             self.pe_dim_all += self.position_emb_dim
         if self.use_abs_coords:
             self.pe_dim_all += self.position_emb_dim
+        # if self.add_skeleton_feat:
+        #     self.pe_dim_all += 55
+
         self.decoder = DecoderSparse(cfg, input_shape, self.in_features, self.pe_dim_all)
 
 

@@ -11,6 +11,7 @@ import os
 from collections import OrderedDict
 import pycocotools.mask as mask_utils
 import torch
+import torch.nn.functional as F
 from fvcore.common.file_io import PathManager
 from pycocotools.coco import COCO
 
@@ -22,11 +23,11 @@ from detectron2.utils.logger import create_small_table
 
 from .converters import ToChartResultConverter, ToMaskConverter
 from .densepose_coco_evaluation import DensePoseCocoEval, DensePoseEvalMode
-from .structures import quantize_densepose_chart_result
+from .structures import quantize_densepose_chart_result, DensePoseChartResult
 import pdb
 
 class DensePoseCOCOEvaluator(DatasetEvaluator):
-    def __init__(self, dataset_name, distributed, output_dir=None):
+    def __init__(self, dataset_name, cfg, distributed, output_dir=None):
         self._distributed = distributed
         self._output_dir = output_dir
 
@@ -38,6 +39,8 @@ class DensePoseCOCOEvaluator(DatasetEvaluator):
         json_file = PathManager.get_local_path(self._metadata.json_file)
         with contextlib.redirect_stdout(io.StringIO()):
             self._coco_api = COCO(json_file)
+
+        self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
 
     def reset(self):
         self._predictions = []
@@ -56,7 +59,10 @@ class DensePoseCOCOEvaluator(DatasetEvaluator):
             instances = output["instances"].to(self._cpu_device)
             if not instances.has("pred_densepose"):
                 continue
-            self._predictions.extend(prediction_to_dict(instances, input["image_id"]))
+            if self.inference_global_siuv:
+                self._predictions.extend(prediction_to_dict_global_siuv(instances, input["image_id"]))
+            else:
+                self._predictions.extend(prediction_to_dict(instances, input["image_id"]))
 
     def evaluate(self, img_ids=None):
         if self._distributed:
@@ -93,6 +99,84 @@ class DensePoseCOCOEvaluator(DatasetEvaluator):
         res["densepose_segm"] = results_segm
         return res
 
+"TODO: implement a global siuv version for correct evaluation"
+def prediction_to_dict_global_siuv(instances, img_id):
+    """
+    Args:
+        instances (Instances): the output of the model
+        img_id (str): the image id in COCO
+
+    Returns:
+        list[dict]: the results in densepose evaluation format
+    """
+    scores = instances.scores.tolist()
+    # if inference_global_siuv:
+    #     segmentations = []
+    #     for k in range(len(instances)):
+    #         segmentations = ToMaskConverter.convert(
+    #             instances.pred_densepose[k:k+1], instances.pred_boxes[k:k+1], instances.image_size
+    #         )
+    # else:
+    #     segmentations = ToMaskConverter.convert(
+    #         instances.pred_densepose, instances.pred_boxes, instances.image_size
+    #     )
+    raw_boxes_xywh = BoxMode.convert(
+        instances.pred_boxes.tensor.clone(), BoxMode.XYXY_ABS, BoxMode.XYWH_ABS
+    )
+
+    results = []
+    for k in range(len(instances)):
+        segmentation = torch.argmax(instances.pred_densepose.coarse_segm[k], dim=0).bool()
+        segmentation_encoded = mask_utils.encode(
+            np.require(segmentation.cpu().numpy(), dtype=np.uint8, requirements=["F"])
+        )
+        segmentation_encoded["counts"] = segmentation_encoded["counts"].decode("utf-8")
+
+        # densepose_results_quantized = quantize_densepose_chart_result(
+        #     ToChartResultConverter.convert(instances.pred_densepose[k], instances.pred_boxes[k])
+        # )
+        # import pdb; pdb.set_trace()
+        x,y,w,h = raw_boxes_xywh[k].int()
+        mask = segmentation[y:y+h,x:x+w]
+        labels = torch.argmax(instances.pred_densepose.fine_segm[0,:,y:y+h,x:x+w], dim=0) * mask.int()
+        labels_onehot = F.one_hot(labels, num_classes=25).permute([2,0,1])
+        u = (labels_onehot * instances.pred_densepose.u[0,:,y:y+h,x:x+w]).sum(dim=0) * mask.float()
+        v = (labels_onehot * instances.pred_densepose.v[0,:,y:y+h,x:x+w]).sum(dim=0) * mask.float()
+        densepose_results_quantized = quantize_densepose_chart_result(
+            DensePoseChartResult(labels=labels, uv=torch.stack([u,v],dim=0))
+        )
+
+        # densepose_results_quantized = quantize_densepose_chart_result(
+        #     ToChartResultConverter.convert(instances.pred_densepose[0], instances.pred_boxes[k])
+        # )
+        # else:
+        densepose_results_quantized.labels_uv_uint8 = (
+            densepose_results_quantized.labels_uv_uint8.cpu()
+        )
+        # segmentation = segmentations.tensor[k]
+        # segmentation = ToMaskConverter.convert(
+        #     instances.pred_densepose[k:k+1], instances.pred_boxes[k:k+1], instances.image_size
+        # ).tensor[0]
+
+        result = {
+            "image_id": img_id,
+            "category_id": 1,  # densepose only has one class
+            "bbox": raw_boxes_xywh[k].tolist(),
+            "score": scores[k],
+            "densepose": densepose_results_quantized,
+            "segmentation": segmentation_encoded,
+        }
+        
+        # import pdb
+        # import imageio
+        # aa = DensePoseChartResult(labels=labels, uv=torch.stack([u,v],dim=0))
+        # iuv = torch.cat([aa.labels[None,...].float()/25, aa.uv], dim=0).permute([1,2,0])
+        # imageio.imwrite("tmp/iuv_global_0.png", iuv.float().cpu().numpy())
+        # # imageio.imwrite("tmp/segmentation.png", segmentation.float().cpu().numpy())
+        # pdb.set_trace()
+
+        results.append(result)
+    return results
 
 def prediction_to_dict(instances, img_id):
     """
@@ -132,6 +216,15 @@ def prediction_to_dict(instances, img_id):
             "densepose": densepose_results_quantized,
             "segmentation": segmentation_encoded,
         }
+
+        # import pdb
+        # import imageio
+        # aa = ToChartResultConverter.convert(instances.pred_densepose[k], instances.pred_boxes[k])
+        # iuv = torch.cat([aa.labels[None,...].float()/25, aa.uv], dim=0).permute([1,2,0])
+        # imageio.imwrite("tmp/iuv.png", iuv.float().cpu().numpy())
+        # # imageio.imwrite("tmp/segmentation.png", segmentation.float().cpu().numpy())
+        # pdb.set_trace()
+
         results.append(result)
     return results
 

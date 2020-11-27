@@ -7,7 +7,7 @@
 
 __author__ = "tsungyi"
 
-import copy
+import copy, pdb
 import datetime
 import logging
 import numpy as np
@@ -318,7 +318,7 @@ class DensePoseCocoEval(object):
                     for imgId in p.imgIds
                     for catId in catIds
                 }
-
+        # pdb.set_trace()
         self.ious = {
             (imgId, catId): computeIoU(imgId, catId) for imgId in p.imgIds for catId in catIds
         }
@@ -415,6 +415,15 @@ class DensePoseCocoEval(object):
             rle_mask = self._generate_rlemask_on_image(mask, imgId, d)
             dtmasks.append(rle_mask)
 
+        # # Debug: COCO RLE --> tensor
+        # pdb.set_trace()
+        # import pycocotools.mask as mask_util
+        # import imageio
+        # for ii in range(len(gtmasks)):
+        #     imageio.imwrite("tmp/gtmasks_{}.png".format(ii), mask_util.decode(gtmasks[ii]).astype(np.float))
+        # for ii in range(len(dtmasks)):
+        #     imageio.imwrite("tmp/dtmasks_{}.png".format(ii), mask_util.decode(dtmasks[ii]).astype(np.float))
+
         # compute iou between each dt and gt region
         iscrowd = [int(o["iscrowd"]) for o in gt]
         iousDP = maskUtils.iou(dtmasks, gtmasks, iscrowd)
@@ -447,6 +456,16 @@ class DensePoseCocoEval(object):
         # compute iou between each dt and gt region
         iscrowd = [int(o["iscrowd"]) for o in gt]
         ious = maskUtils.iou(d, g, iscrowd)
+
+        # # Debug: COCO RLE --> tensor
+        # import pycocotools.mask as mask_util
+        # import imageio
+        # for ii in range(len(g)):
+        #     imageio.imwrite("tmp/g_mask_{}.png".format(ii), mask_util.decode(g[ii]).astype(np.float))
+        # for ii in range(len(d)):
+        #     imageio.imwrite("tmp/d_mask_{}.png".format(ii), mask_util.decode(d[ii]).astype(np.float))
+        # pdb.set_trace()
+
         return ious
 
     def computeOks(self, imgId, catId):
@@ -660,6 +679,7 @@ class DensePoseCocoEval(object):
         dtind = np.argsort([-d["score"] for d in dt], kind="mergesort")
         dt = [dt[i] for i in dtind[0:maxDet]]
         iscrowd = [int(o["iscrowd"]) for o in gt]
+        # pdb.set_trace()
         # load computed ious
         if p.iouType == "densepose":
             # print('Checking the length', len(self.ious[imgId, catId]))

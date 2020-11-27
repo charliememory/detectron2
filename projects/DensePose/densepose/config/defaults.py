@@ -266,11 +266,14 @@ _C.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention = False
 _C.MODEL.CONDINST.IUVHead.RESIDUAL_INPUT = False
 _C.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_AFTER_RELU = False
 _C.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER = False
+_C.MODEL.CONDINST.IUVHead.SKELETON_FEATURES = False
+_C.MODEL.CONDINST.IUVHead.GT_SKELETON = False
 
 _C.MODEL.CONDINST.FINETUNE_IUVHead_ONLY = False
 _C.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV = False
 
 _C.SOLVER.ACCUMULATE_GRAD_ITER = 1
+_C.SOLVER.FIND_UNUSED_PARAMETERS = True
 # ---------------------------------------------------------------------------- #
 # TOP Module Options
 # ---------------------------------------------------------------------------- #

@@ -13,17 +13,18 @@ from .chart import DensePoseChartLoss
 # from .chart_global_IUV_seperated_S import DensePoseChartGlobalIUVSeparatedSLoss
 from .registry import DENSEPOSE_LOSS_REGISTRY
 from .utils import BilinearInterpolationHelper, LossDict, SingleTensorsHelper
+from .utils import dice_coefficient, FocalLoss
 
 
-def dice_coefficient(x, target):
-    eps = 1e-5
-    n_inst = x.size(0)
-    x = x.reshape(n_inst, -1)
-    target = target.reshape(n_inst, -1)
-    intersection = (x * target).sum(dim=1)
-    union = (x ** 2.0).sum(dim=1) + (target ** 2.0).sum(dim=1) + eps
-    loss = 1. - (2 * intersection / union)
-    return loss
+# def dice_coefficient(x, target):
+#     eps = 1e-5
+#     n_inst = x.size(0)
+#     x = x.reshape(n_inst, -1)
+#     target = target.reshape(n_inst, -1)
+#     intersection = (x * target).sum(dim=1)
+#     union = (x ** 2.0).sum(dim=1) + (target ** 2.0).sum(dim=1) + eps
+#     loss = 1. - (2 * intersection / union)
+#     return loss
 
 
 @DENSEPOSE_LOSS_REGISTRY.register()
@@ -170,9 +171,21 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
             w_yhi_xlo=interpolator.w_yhi_xlo[:, None],
             w_yhi_xhi=interpolator.w_yhi_xhi[:, None],
         )[interpolator.j_valid, :]
-        losses = {
-            "loss_densepose_I": F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
-        }
+        if self.use_part_focal_loss:
+            # pdb.set_trace()
+            losses = {
+                "loss_densepose_I": self.focal_loss(fine_segm_est, fine_segm_gt.long()) * self.w_part
+            }
+        else:
+            losses = {
+                "loss_densepose_I": F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
+            }
+        fine_segm_est = torch.argmax(fine_segm_est,dim=1)
+        # print(fine_segm_est.min(), fine_segm_est.max())
+        # print(fine_segm_gt.min(), fine_segm_gt.max())
+        # pdb.set_trace()
+        # import imageio
+        # imageio.imwrite("tmp/fine_segm_gt")
 
         if not self.segm_trained_by_masks:
             # Resample everything to the estimated data size, no need to resample

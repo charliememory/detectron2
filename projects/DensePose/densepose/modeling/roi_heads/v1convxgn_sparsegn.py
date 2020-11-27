@@ -318,7 +318,7 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                 elif idx==18:
                     x = self.add_sparse([x,res])
             if self.use_res_input:
-                if idx in [0,9,18]:
+                if idx in [0,9,18,27,36]:
                     res = x
             # print(type(layer))
             # if isinstance(layer, spconv.SubMConv2d):
@@ -334,7 +334,7 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                 x = layer(x)
 
             if self.use_res_input:
-                if idx in [5,14,23]:
+                if idx in [5,14,23,32,41]:
                     x = self.add_sparse([x,res])
 
 

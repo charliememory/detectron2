@@ -205,8 +205,11 @@ class MaskBranch(nn.Module):
         self.use_weight_std = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
         self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
 
+        self.add_skeleton_feat = cfg.MODEL.CONDINST.IUVHead.SKELETON_FEATURES
+
         feature_channels = {k: v.channels for k, v in input_shape.items()}
 
+        conv_block_no_act = conv_with_kaiming_uniform(norm, activation=False, use_weight_std=self.use_weight_std)
         conv_block = conv_with_kaiming_uniform(norm, activation=True, use_weight_std=self.use_weight_std)
 
 
@@ -231,13 +234,22 @@ class MaskBranch(nn.Module):
             #     self.refine.append(layer)
             # else:
             if self.v2 and idx>0 and in_feature not in ["p6","p7"]:
-                self.refine.append(nn.Sequential(*[
-                    conv_block(
-                        feature_channels[in_feature],
-                        agg_channels, 3, 1
-                    ),
-                    nn.Upsample(scale_factor=2**idx)
-                ]))
+                if self.add_skeleton_feat:
+                    self.refine.append(nn.Sequential(*[
+                        conv_block_no_act(
+                            feature_channels[in_feature],
+                            agg_channels, 3, 1
+                        ),
+                        nn.Upsample(scale_factor=2**idx)
+                    ]))
+                else:
+                    self.refine.append(nn.Sequential(*[
+                        conv_block(
+                            feature_channels[in_feature],
+                            agg_channels, 3, 1
+                        ),
+                        nn.Upsample(scale_factor=2**idx)
+                    ]))
 
                     # aligned_bilinear_layer(
                     #     factor=2**idx
@@ -249,6 +261,15 @@ class MaskBranch(nn.Module):
                         agg_channels, 3, 1
                     )
                 )
+
+        if self.add_skeleton_feat:
+            self.conv_skeleton = conv_block(
+                agg_channels+55,
+                agg_channels, 3, 1
+            )
+
+
+
         if self.use_eca:
             self.eca = eca_layer(agg_channels, k_size=3)
 
@@ -273,6 +294,11 @@ class MaskBranch(nn.Module):
         #     )
         if "p2" == self.in_features[0]:
             if self.v2:
+                # if self.add_skeleton_feat:
+                #     tower = [conv_block(
+                #             agg_channels+55, channels, 3, 2, 1
+                #         )]
+                # else:
                 tower = [conv_block(
                         agg_channels, channels, 3, 2, 1
                     )]
@@ -337,7 +363,7 @@ class MaskBranch(nn.Module):
             return inputs
         return custom_forward
 
-    def forward(self, features, gt_instances=None):
+    def forward(self, features, skeleton_feats=None, gt_instances=None):
 
         # if self.use_decoder:
         #     features = [features[f] for f in self.in_features]
@@ -364,6 +390,10 @@ class MaskBranch(nn.Module):
                     assert factor_h == factor_w
                     x_p = aligned_bilinear(x_p, factor_h)
                 x = x + x_p
+        if self.add_skeleton_feat:
+            # pdb.set_trace()
+            x = self.conv_skeleton(torch.cat([x,skeleton_feats], dim=1))
+
         if self.use_aspp:
             x = self.ASPP(x)
         if self.num_lambda_layer>0:

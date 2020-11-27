@@ -131,6 +131,9 @@ class Decoder(nn.Module):
             x = torch.cat([x,rel_coord], dim=1)
         if abs_coord is not None:
             x = torch.cat([x,abs_coord], dim=1)
+        # if skeleton_feats is not None:
+        #     x = torch.cat([x,skeleton_feats], dim=1)
+
         # pdb.set_trace()
         if rel_coord is not None or abs_coord is not None:
             x = self.comb_pe_conv(x)
@@ -151,7 +154,9 @@ class CoordGlobalIUVPooler2Head(nn.Module):
         self.use_rel_coords = cfg.MODEL.CONDINST.IUVHead.REL_COORDS
         self.use_abs_coords = cfg.MODEL.CONDINST.IUVHead.ABS_COORDS
         self.pos_emb_num_freqs = cfg.MODEL.CONDINST.IUVHead.POSE_EMBEDDING_NUM_FREQS
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
         self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
+        self.add_skeleton_feat = cfg.MODEL.CONDINST.IUVHead.SKELETON_FEATURES
         self.use_pos_emb = self.pos_emb_num_freqs>0
         if self.use_pos_emb:
             self.position_embedder, self.position_emb_dim = get_embedder(multires=self.pos_emb_num_freqs, input_dims=2)
@@ -160,6 +165,8 @@ class CoordGlobalIUVPooler2Head(nn.Module):
             self.pe_dim_all += self.position_emb_dim
         if self.use_abs_coords:
             self.pe_dim_all += self.position_emb_dim
+        if self.add_skeleton_feat:
+            self.pe_dim_all += 55
         self.decoder = Decoder(cfg, input_shape, self.in_features, self.pe_dim_all)
 
         dp_pooler_resolution       = cfg.MODEL.ROI_DENSEPOSE_HEAD.HEATMAP_SIZE
@@ -212,12 +219,16 @@ class CoordGlobalIUVPooler2Head(nn.Module):
             return None, iuv_logits
         else:
             features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
+            # pdb.set_trace()
 
             if self.inference_global_siuv:
                 iuv_logits = features[0]
                 coarse_segm = s_logits
             else:
                 # if isinstance(instances,Instances):
+                # if self.use_gt_ins:
+                #     proposal_boxes = [x.gt_boxes for x in gt_instances]
+                # else:
                 proposal_boxes = [instances.pred_boxes]
                 # else:
                 #     proposal_boxes = [x.pred_boxes for x in instances]

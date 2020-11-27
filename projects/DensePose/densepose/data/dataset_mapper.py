@@ -3,9 +3,10 @@
 
 import copy, pdb
 import logging
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, List
 import torch
 from fvcore.common.file_io import PathManager
+import numpy as np
 
 from detectron2.data import MetadataCatalog
 from detectron2.data import detection_utils as utils
@@ -14,6 +15,8 @@ from detectron2.layers import ROIAlign
 from detectron2.structures import BoxMode
 
 from .structures import DensePoseDataRelative, DensePoseList, DensePoseTransformData
+
+from .skeleton_feat import genSkeletons
 
 
 def build_augmentation(cfg, is_train):
@@ -78,6 +81,11 @@ class DatasetMapper:
             )
 
         self.is_train = is_train
+        self.use_gt_ins = cfg.MODEL.CONDINST.IUVHead.GT_INSTANCES
+        self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
+        self.use_gt_skeleton = cfg.MODEL.CONDINST.IUVHead.GT_SKELETON
+        if self.use_gt_skeleton:
+            self.keypoint_on = True
 
     def __call__(self, dataset_dict):
         """
@@ -95,7 +103,8 @@ class DatasetMapper:
         image_shape = image.shape[:2]  # h, w
         dataset_dict["image"] = torch.as_tensor(image.transpose(2, 0, 1).astype("float32"))
 
-        if not self.is_train:
+        # if not self.is_train:
+        if not self.is_train and not self.use_gt_ins and not self.use_gt_skeleton:
             dataset_dict.pop("annotations", None)
             return dataset_dict
 
@@ -128,8 +137,55 @@ class DatasetMapper:
                 densepose_annotations, instances.gt_boxes, image_shape
             )
 
+        if self.keypoint_on:
+            dataset_dict["skeleton_feat"] = self._get_skeleton_feat(annos, image_shape)
+            # if ske_feat is not None:
+            # dataset_dict["skeleton_feats"] = ske_feats
+
         dataset_dict["instances"] = instances[instances.gt_boxes.nonempty()]
         return dataset_dict
+
+    "TODO"
+    # def _add_skeleton_feat(
+    #     self, annotations: Dict[str, Any], image_shape_hw: Tuple[int, int]
+    # ):
+    def _get_skeleton_feat(self, annotation, image_shape):
+        "TODO"
+        ske_feat_all = None
+        cnt = 0
+        for idx, obj in enumerate(annotation):
+            kpts = obj['keypoints']
+            if kpts.sum()!=0:
+                # assert obj['densepose'] is not None
+                ske_feat = genSkeletons(kpts[None,...], image_shape[0], image_shape[1], 
+                        stride=self.mask_out_stride, sigma=3, threshold=1, visdiff = True).transpose(2, 0, 1)
+                # ske_feat = genSkeletons(kpts[None,...], image_shape[0], image_shape[1], 
+                #         stride=1, sigma=5, threshold=3, visdiff = True).transpose(2, 0, 1)
+                # obj["skeleton_feat"] = torch.from_numpy(ske_feat)
+            # else:
+                # obj["skeleton_feat"] = None
+                if ske_feat_all is None:
+                    ske_feat_all = ske_feat
+                else:
+                    ske_feat_all += ske_feat
+                cnt += (ske_feat!=0).astype(np.float)
+
+        if ske_feat_all is not None:
+            ske_feat_all = ske_feat_all/(cnt+1e-5)
+            return torch.from_numpy(ske_feat_all).float()
+        else:
+            return None
+
+        # if ske_feat_all is not None:
+        #     ske_feat_all = ske_feat_all/(cnt+1e-5)
+        #     # import imageio
+        #     # h, w = ske_feat_all.shape[-2:]
+        #     # paf_x = ske_feat_all[-38:].reshape([19,2,h,w])[:,0]
+        #     # paf_y = ske_feat_all[-38:].reshape([19,2,h,w])[:,1]
+        #     # imageio.imwrite("tmp/ske_feat.png", ske_feat_all.sum(0))
+        #     # imageio.imwrite("tmp/paf_x.png", paf_x.sum(0))
+        #     # imageio.imwrite("tmp/paf_y.png", paf_y.sum(0))
+        #     pdb.set_trace()
 
     def _transform_densepose(self, annotation, transforms):
         if not self.densepose_on:
@@ -151,7 +207,7 @@ class DatasetMapper:
         return annotation
 
     def _add_densepose_masks_as_segmentation(
-        self, annotations: Dict[str, Any], image_shape_hw: Tuple[int, int]
+        self, annotations: List[Any], image_shape_hw: Tuple[int, int]
     ):
         for obj in annotations:
             if ("densepose" not in obj) or ("segmentation" in obj):

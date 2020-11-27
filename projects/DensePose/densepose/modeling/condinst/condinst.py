@@ -148,6 +148,8 @@ class CondInst(nn.Module):
         self.finetune_iuvhead_only = cfg.MODEL.CONDINST.FINETUNE_IUVHead_ONLY
         self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
 
+        self.add_skeleton_feat = cfg.MODEL.CONDINST.IUVHead.SKELETON_FEATURES
+        self.use_gt_skeleton = cfg.MODEL.CONDINST.IUVHead.GT_SKELETON
 
         # ## original ROI based densepose head
         # from detectron2.modeling.poolers import ROIPooler
@@ -191,10 +193,20 @@ class CondInst(nn.Module):
 
     "TODO: convert raw input to detectron2.structures.instances.Instances to reuse densepose code"
     def forward(self, batched_inputs):
-        # pdb.set_trace()
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [self.normalizer(x) for x in images]
         images = ImageList.from_tensors(images, self.backbone.size_divisibility)
+
+        # import imageio
+        # imageio.imwrite("tmp/img_0.png", images.tensor[0].permute(1,2,0).detach().cpu().numpy())
+        # imageio.imwrite("tmp/img_1.png", images.tensor[1].permute(1,2,0).detach().cpu().numpy())
+        # skeleton_feats = [x["skeleton_feat"].to(self.device) for x in batched_inputs]
+        # skeleton_feats = ImageList.from_tensors(skeleton_feats, self.backbone.size_divisibility)
+        # pdb.set_trace()
+        skeleton_feats = None
+        if self.add_skeleton_feat:
+            if self.use_gt_skeleton:
+                skeleton_feats = self.process_skeleton_feats(batched_inputs, images.tensor.size(-2), images.tensor.size(-1))
 
         if self.finetune_iuvhead_only:
             with torch.no_grad():
@@ -208,7 +220,7 @@ class CondInst(nn.Module):
                 else:
                     gt_instances = None
 
-                agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+                agg_feats, mask_feats, sem_losses = self.mask_branch(features, skeleton_feats, gt_instances)
                 # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
                 if self.use_mask_feats_iuvhead:
                     iuv_feats, s_ins_feats = mask_feats, mask_feats
@@ -231,7 +243,7 @@ class CondInst(nn.Module):
 
 
             assert self.training
-            densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances)
+            densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, skeleton_feats, gt_instances=gt_instances)
 
             # # instances = 
             # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
@@ -288,8 +300,9 @@ class CondInst(nn.Module):
                 self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
             else:
                 gt_instances = None
+                        
 
-            agg_feats, mask_feats, sem_losses = self.mask_branch(features, gt_instances)
+            agg_feats, mask_feats, sem_losses = self.mask_branch(features, skeleton_feats, gt_instances)
             # iuv_feats, s_ins_feats = mask_feats[:,:self.iuv_fea_dim], mask_feats[:,self.iuv_fea_dim:]
             if self.use_mask_feats_iuvhead:
                 iuv_feats, s_ins_feats = mask_feats, mask_feats
@@ -363,7 +376,7 @@ class CondInst(nn.Module):
                 # "TODO add densepose inference"
                 assert len(batched_inputs)==1
                 imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-                densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, imgsize=imgsize)
+                densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances, imgsize=imgsize)
                 
                 # pdb.set_trace()
                 # import imageio
@@ -413,6 +426,9 @@ class CondInst(nn.Module):
 
                 #     densepose_instances, _ = self.roi_heads(images, features, proposals, None)
 
+                "TODO: add postprocess to eval-test."
+                "So, during test, first postprocess, then apply pooler"
+
                 if self.inference_global_siuv:
                     padded_im_h, padded_im_w = images.tensor.size()[-2:]
                     processed_results = []
@@ -420,14 +436,15 @@ class CondInst(nn.Module):
                         height = input_per_image.get("height", image_size[0])
                         width = input_per_image.get("width", image_size[1])
 
-                        instances_per_im = densepose_instances[im_id]
-                        instances_per_im = self.postprocess_global_siuv(
-                            instances_per_im, height, width,
+                        results_per_image = densepose_instances[im_id]
+                        # if hasattr(results_per_image ,"pred_densepose"):
+                        results_per_image = self.postprocess_global_siuv(
+                            results_per_image, height, width,
                             padded_im_h, padded_im_w
                         )
 
                         processed_results.append({
-                            "instances": instances_per_im
+                            "instances": results_per_image
                         })
 
 
@@ -440,6 +457,11 @@ class CondInst(nn.Module):
                         height = input_per_image.get("height", image_size[0])
                         width = input_per_image.get("width", image_size[1])
                         results_per_image._image_size = (height, width)
+
+                        # "TODO"
+                        # kpts =  torch.zeros([len(results_per_image),17,3])
+                        # results_per_image.set("keypoints", kpts)
+
                         processed_results.append({"instances": results_per_image})
 
                 torch.cuda.empty_cache()
@@ -489,7 +511,7 @@ class CondInst(nn.Module):
 
         return loss_mask
 
-    def _forward_mask_heads_test(self, proposals, fpn_features, mask_feats, iuv_feats, imgsize):
+    def _forward_mask_heads_test(self, proposals, fpn_features, mask_feats, iuv_feats, gt_instances, imgsize):
         # prepare the inputs for mask heads
         for im_id, per_im in enumerate(proposals):
             per_im.im_inds = per_im.locations.new_ones(len(per_im), dtype=torch.long) * im_id
@@ -502,21 +524,16 @@ class CondInst(nn.Module):
         # )
 
         densepose_instances, densepose_outputs = self.mask_head(self.iuv_head, 
-            fpn_features, mask_feats, iuv_feats, 
-            self.mask_branch.out_stride, pred_instances, 
+            fpn_features, mask_feats, iuv_feats,
+            self.mask_branch.out_stride, pred_instances, gt_instances=gt_instances,
             mask_out_bg_feats=self.mask_out_bg_feats
         )
 
         # im_inds = densepose_instances.get('im_inds')
+        # if self.use_gt_ins:
+
         boxes = densepose_instances.pred_boxes.tensor
         boxes = boxes/densepose_instances.image_size[0]*imgsize[0]
-        # boxes_new = []
-        # for idx in range(boxes.shape[0]):
-        #     bb = boxes[idx:idx+1]
-        #     x1, y1, x2, y2 = bb[0]
-        #     im_idx = im_inds[idx].item()
-        #     boxes_new.append(bb/(y2-y1)*imgsize_ori_list[im_idx][0])
-        # pdb.set_trace()
         densepose_instances.set('pred_boxes', Boxes(boxes))
 
         # pdb.set_trace()
@@ -607,6 +624,28 @@ class CondInst(nn.Module):
                 per_im_gt_inst.gt_bitmasks = bitmasks
                 per_im_gt_inst.gt_bitmasks_full = bitmasks_full
 
+
+    def process_skeleton_feats(self, batched_inputs, im_h, im_w):
+        skeleton_feats = [x["skeleton_feat"] for x in batched_inputs]
+        # skeleton_feats = ImageList.from_tensors(skeleton_feats, self.backbone.size_divisibility)
+        im_h = im_h // self.mask_out_stride
+        im_w = im_w // self.mask_out_stride
+        ske_feat_list = []
+        start = int(self.mask_out_stride // 2)
+        for idx in range(len(skeleton_feats)):
+            h, w = skeleton_feats[idx].shape[-2:]
+            ske_feat = F.pad(skeleton_feats[idx], (0, im_w - w, 0, im_h - h), "constant", 0)
+            # ske_feat_full = F.pad(skeleton_feats[idx], (0, im_w - w, 0, im_h - h), "constant", 0)
+            # ske_feat = ske_feat_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
+            ske_feat_list.append(ske_feat)
+        # pdb.set_trace()
+        # import imageio
+        # imageio.imwrite("tmp/ske_feat.png", ske_feat.sum(0).detach().cpu().numpy())
+
+        return torch.stack(ske_feat_list, dim=0).to(self.device)
+
+
+
     # @staticmethod
     # def _postprocess(instances, batched_inputs, image_sizes):
     #     """
@@ -658,18 +697,26 @@ class CondInst(nn.Module):
         Returns:
             Instances: the resized output from the model, based on the output resolution
         """
-        scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
+        # scale_x, scale_y = (output_width / results.image_size[1], output_height / results.image_size[0])
         resized_im_h, resized_im_w = results.image_size
         results = Instances((output_height, output_width), **results.get_fields())
         # results._image_size = (output_height, output_width)
 
-        if results.has("pred_boxes"):
-            output_boxes = results.pred_boxes
-        elif results.has("proposal_boxes"):
-            output_boxes = results.proposal_boxes
+        # if results.has("pred_boxes"):
+        #     output_boxes = results.pred_boxes
+        # elif results.has("proposal_boxes"):
+        #     output_boxes = results.proposal_boxes
 
-        output_boxes.scale(scale_x, scale_y)
-        output_boxes.clip(results.image_size)
+        # output_boxes.scale(scale_x, scale_y)
+        # output_boxes.clip(results.image_size)
+
+        ## Change bbox to whole image size
+        # N_ins = results.pred_boxes.tensor.shape[0]
+        # boxes = torch.tensor([0,0,output_width,output_height], device=results.pred_boxes.tensor.device)
+        # results.pred_boxes.tensor = torch.stack([boxes]*N_ins, dim=0)
+
+        if not hasattr(results ,"pred_densepose"):
+            return results
 
         if remove_empty:
             # valid_idxs = output_boxes.nonempty()

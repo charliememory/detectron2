@@ -50,6 +50,24 @@ source ~/.bashrc_liqianma
 #     # MODEL.CONDINST.IUVHead.ABS_COORDS True \
 
 
+if [ -d "/usr/local/cuda-10.2/bin" ] 
+then
+    echo "/usr/local/cuda-10.2/bin exists." 
+else
+    echo "/usr/local/cuda-10.2/bin does not exists. Use cuda-11.1"
+    export CUDA_HOME=/usr/local/cuda-11.1
+    export CUDNN_HOME=/esat/dragon/liqianma/workspace/cudnn-11.1-linux-x64-v8.0.4.30
+    export PATH=$CUDA_HOME/bin:$PATH 
+    # for torch
+    export CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME
+    export CUDA_BIN_PATH=$CUDA_HOME
+    # libs for deep learning framework
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
+    # for CUDA & atlas
+    export CUDNN_INCLUDE="$CUDNN_HOME/include"
+    export CUDNN_INCLUDE_DIR="$CUDNN_HOME/include"
+    export INCLUDE_DIR="$CUDA_HOME/include:$CUDNN_HOME/include:$INCLUDE_DIR"
+fi
 cd ~/workspace/Gitlab/spconv/
 rm -rf build
 python setup.py bdist_wheel
@@ -60,13 +78,13 @@ cd ~/workspace/Gitlab/detectron2/projects/DensePose
  
 cfg_name='densepose_CondInst_R_50_s1x'
 CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
-    --resume \
-    SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 \
-    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueReslater2_GTinsDilated3  \
+    --resume --num-gpus 1 \
+    SOLVER.IMS_PER_BATCH 1 SOLVER.BASE_LR 0.0025 SOLVER.ACCUMULATE_GRAD_ITER 16 \
+    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_GTinsDilated3_amp_BS1x16  \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-    SOLVER.CHECKPOINT_PERIOD 5000 \
-    DATALOADER.NUM_WORKERS 2 \
+    SOLVER.CHECKPOINT_PERIOD 2000 \
+    DATALOADER.NUM_WORKERS 4 \
     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
@@ -79,10 +97,10 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.IUVHead.GT_INSTANCES True \
     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-    MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER True \
-    # MODEL.CONDINST.IUVHead.Efficient_Channel_Attention True \
-    # MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION True \
-    # MODEL.BACKBONE.NAME "build_fcos_resnet_fpnws_backbone" \
+    MODEL.CONDINST.v2 True \
+    SOLVER.AMP.ENABLED True \
+    MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+    MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
 
 # cfg_name='densepose_CondInst_R_50_s1x'
 # CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
