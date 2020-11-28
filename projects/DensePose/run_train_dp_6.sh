@@ -83,7 +83,7 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputDilate_resIUVOnly_GTinsDilated3_amp  \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-    SOLVER.CHECKPOINT_PERIOD 2000 \
+    SOLVER.CHECKPOINT_PERIOD 5000 \
     DATALOADER.NUM_WORKERS 4 \
     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \

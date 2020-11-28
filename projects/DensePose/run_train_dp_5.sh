@@ -198,10 +198,10 @@ cfg_name='densepose_CondInst_R_50_s1x'
 CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
     --resume  --num-gpus 1 \
     SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 SOLVER.ACCUMULATE_GRAD_ITER 1 \
-    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsECA_resIUVOnly_GTinsDilated3_amp  \
+    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsEcaAfterRelu_resIUVOnly_GTinsDilated3_amp  \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-    SOLVER.CHECKPOINT_PERIOD 2000 \
+    SOLVER.CHECKPOINT_PERIOD 5000 \
     DATALOADER.NUM_WORKERS 4 \
     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
@@ -218,7 +218,7 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.v2 True \
     SOLVER.AMP.ENABLED True \
     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-    MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION True \
+    MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION "AfterRelu" \
     # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
 # MODEL.CONDINST.IUVHead.DILATION_CONV
 

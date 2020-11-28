@@ -207,9 +207,13 @@ class SparseInsECA(nn.Module):
             out = x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).mean(dim=0).unsqueeze(dim=1) ## HWxBxC -> Bx1xC
             out_batch.append(out)
         # pdb.set_trace()
-        out_batch = self.activation(self.conv(torch.cat(out_batch, dim=0))).squeeze(dim=1) ## Bx1xC -> BxC
+        out_batch = self.activation(self.conv(torch.cat(out_batch, dim=0)))#.squeeze(dim=1) ## Bx1xC -> BxC
         for i in ins_ids:
-            x.features[(ins_indices_batch==i).nonzero(),] = x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]) * out_batch[i:i+1]
+            try:
+                x.features[(ins_indices_batch==i).nonzero(),] = x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]) * out_batch[i:i+1]
+            except Exception as e:
+                pass
+                # print(e)
         return x
 
 # for i in ins_ids:
@@ -300,6 +304,12 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                     self.layers.append(layer)
                     cnt += 1
 
+                if self.use_ins_eca=="AfterConv":
+                    layer = SparseInsECA(channel=hidden_dim)
+                    self.add_module("layer{}".format(cnt), layer)
+                    self.layers.append(layer)
+                    cnt += 1
+
                 # if self.use_ins_gn:
                 #     layer = SparseInsGNBNIN(32, n_channels)
                 if norm in ["GN","BN"]:
@@ -311,17 +321,30 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                 self.layers.append(layer)
                 cnt += 1
 
-                if self.use_ins_eca:
+                if self.use_ins_eca=="AfterNorm":
                     layer = SparseInsECA(channel=hidden_dim)
                     self.add_module("layer{}".format(cnt), layer)
                     self.layers.append(layer)
                     cnt += 1
 
-                layer = SparseReLU(inplace=True)
-                # layer_name = self._get_layer_name(cnt)
-                self.add_module("layer{}".format(cnt), layer)
-                self.layers.append(layer)
-                cnt += 1
+
+                if self.use_ins_eca=="AfterRelu":
+                    layer = SparseReLU(inplace=False)
+                    # layer_name = self._get_layer_name(cnt)
+                    self.add_module("layer{}".format(cnt), layer)
+                    self.layers.append(layer)
+                    cnt += 1
+
+                    layer = SparseInsECA(channel=hidden_dim)
+                    self.add_module("layer{}".format(cnt), layer)
+                    self.layers.append(layer)
+                    cnt += 1
+                else:
+                    layer = SparseReLU(inplace=True)
+                    # layer_name = self._get_layer_name(cnt)
+                    self.add_module("layer{}".format(cnt), layer)
+                    self.layers.append(layer)
+                    cnt += 1
 
                 n_channels = hidden_dim
             self.n_out_channels = n_channels
@@ -390,10 +413,14 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
             #         x = self.add_sparse([x,res])
 
             if self.use_res_input:
-                if self.use_ins_eca:
+                if self.use_ins_eca!="none":
                     # pdb.set_trace()
-                    if idx in [0,9+3,18+6,27+9,36+12]:
-                        res = x
+                    if self.use_ins_eca=="AfterRelu":
+                        if idx in [0,9+3-1,18+6-1,27+9-1,36+12-1]:
+                            res = x
+                    else:
+                        if idx in [0,9+3,18+6,27+9,36+12]:
+                            res = x
                 else:
                     if idx in [0,9,18,27,36]:
                         res = x
@@ -412,9 +439,13 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                 x = layer(x)
 
             if self.use_res_input:
-                if self.use_ins_eca:
-                    if idx in [5+3,14+6,23+9,32+12,41+15]:
-                        x = self.add_sparse([x,res])
+                if self.use_ins_eca!="none":
+                    if self.use_ins_eca=="AfterRelu":
+                        if idx in [5+3-1,14+6-1,23+9-1,32+12-1,41+15-1]:
+                            x = self.add_sparse([x,res])
+                    else:
+                        if idx in [5+3,14+6,23+9,32+12,41+15]:
+                            x = self.add_sparse([x,res])
                 else:
                     if idx in [5,14,23,32,41]:
                         x = self.add_sparse([x,res])
