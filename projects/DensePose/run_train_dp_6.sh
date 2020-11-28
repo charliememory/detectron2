@@ -78,9 +78,9 @@ cd ~/workspace/Gitlab/detectron2/projects/DensePose
  
 cfg_name='densepose_CondInst_R_50_s1x'
 CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
-    --resume --num-gpus 1 \
-    SOLVER.IMS_PER_BATCH 1 SOLVER.BASE_LR 0.0025 SOLVER.ACCUMULATE_GRAD_ITER 16 \
-    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_GTinsDilated3_amp_BS1x16  \
+    --resume  --num-gpus 1 \
+    SOLVER.IMS_PER_BATCH 2 SOLVER.BASE_LR 0.0025 SOLVER.ACCUMULATE_GRAD_ITER 1 \
+    OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputDilate_resIUVOnly_GTinsDilated3_amp  \
     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
     SOLVER.CHECKPOINT_PERIOD 2000 \
@@ -100,7 +100,34 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.v2 True \
     SOLVER.AMP.ENABLED True \
     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-    MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+    MODEL.CONDINST.IUVHead.DILATION_CONV True \
+    # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+
+# cfg_name='densepose_CondInst_R_50_s1x'
+# CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
+#     --resume --num-gpus 1 \
+#     SOLVER.IMS_PER_BATCH 1 SOLVER.BASE_LR 0.0025 SOLVER.ACCUMULATE_GRAD_ITER 16 \
+#     OUTPUT_DIR ./output/${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_GTinsDilated3_amp_BS1x16  \
+#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+#     SOLVER.CHECKPOINT_PERIOD 2000 \
+#     DATALOADER.NUM_WORKERS 4 \
+#     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+#     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+#     MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+#     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+#     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+#     MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+#     MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+#     MODEL.CONDINST.IUVHead.GT_INSTANCES True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+#     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+#     MODEL.CONDINST.v2 True \
+#     SOLVER.AMP.ENABLED True \
+#     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+#     MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
 
 # cfg_name='densepose_CondInst_R_50_s1x'
 # CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
