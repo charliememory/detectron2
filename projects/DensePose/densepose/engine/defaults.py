@@ -284,6 +284,7 @@ class DefaultTrainer(TrainerBase):
         data_loader = self.build_train_loader(cfg)
 
         # For training, wrap with DDP. But don't need this for inference.
+        ## add FIND_UNUSED_PARAMETERS
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
                 model, device_ids=[comm.get_local_rank()], broadcast_buffers=False,

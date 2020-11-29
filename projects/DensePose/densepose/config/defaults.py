@@ -275,7 +275,7 @@ _C.MODEL.CONDINST.FINETUNE_IUVHead_ONLY = False
 _C.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV = False
 
 _C.SOLVER.ACCUMULATE_GRAD_ITER = 1
-_C.SOLVER.FIND_UNUSED_PARAMETERS = True
+_C.SOLVER.FIND_UNUSED_PARAMETERS = True ##
 # ---------------------------------------------------------------------------- #
 # TOP Module Options
 # ---------------------------------------------------------------------------- #
@@ -288,7 +288,7 @@ _C.MODEL.TOP_MODULE.DIM = 16
 # ---------------------------------------------------------------------------- #
 
 _C.MODEL.BiFPN = CN()
-# Names of the input feature maps to be used by BiFPN
+# Names of the input feature maps to be used by BiFPN 
 # They must have contiguous power of 2 strides
 # e.g., ["res2", "res3", "res4", "res5"]
 _C.MODEL.BiFPN.IN_FEATURES = ["res2", "res3", "res4", "res5"]

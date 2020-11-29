@@ -102,6 +102,8 @@ CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yam
     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
     MODEL.CONDINST.IUVHead.DILATION_CONV True \
     # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+    
+./run_train_dp_8.sh
 
 # cfg_name='densepose_CondInst_R_50_s1x'
 # CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
