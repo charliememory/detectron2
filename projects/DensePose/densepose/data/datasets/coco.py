@@ -244,7 +244,7 @@ def create_video_frame_mapping(dataset_name, dataset_dicts):
     MetadataCatalog.get(dataset_name).set(video_frame_mapping=mapping)
 
 
-def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: str, ins_num=[14]):
+def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: str, ins_num=[]):
     """
     Loads a JSON file with annotations in COCO instances format.
     Replaces `detectron2.data.datasets.coco.load_coco_json` to handle metadata
@@ -264,6 +264,8 @@ def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: st
         If provided, these keys are used to extract additional data from
         the annotations.
     """
+    if "train" in annotations_json_file:
+        assert ins_num==[]
     coco_api = _load_coco_annotations(PathManager.get_local_path(annotations_json_file))
     _add_categories_metadata(dataset_name, coco_api.loadCats(coco_api.getCatIds()))
     # sort indices for reproducible results
