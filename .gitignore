@@ -49,6 +49,6 @@ wheels/
 /projects/DensePose*/outputs
 /projects/DensePose*/*.pkl
 /projects/DensePose*/*.png
-# /projects/DensePose*/*.sh
+/projects/DensePose*/*.sh
 /projects/DensePose*/tmp
 *.DS_Store

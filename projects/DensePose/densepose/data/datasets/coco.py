@@ -244,7 +244,7 @@ def create_video_frame_mapping(dataset_name, dataset_dicts):
     MetadataCatalog.get(dataset_name).set(video_frame_mapping=mapping)
 
 
-def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: str):
+def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: str, ins_num=[14]):
     """
     Loads a JSON file with annotations in COCO instances format.
     Replaces `detectron2.data.datasets.coco.load_coco_json` to handle metadata
@@ -294,6 +294,10 @@ def load_coco_json(annotations_json_file: str, image_root: str, dataset_name: st
     anns = [coco_api.imgToAnns[img_id] for img_id in img_ids]
     _verify_annotations_have_unique_ids(annotations_json_file, anns)
     dataset_records = _combine_images_with_annotations(dataset_name, image_root, imgs, anns)
+
+    if ins_num != []:
+        dataset_records_chunk = [record for record in dataset_records if len(record['annotations']) in ins_num]
+        dataset_records = dataset_records_chunk
     return dataset_records
 
 def filter_out_no_densepose(img_list):

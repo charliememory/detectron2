@@ -4,13 +4,13 @@ requirement.txt
 torch                  1.6.0
 pycocotools            2.0.2
 detectron2             0.3
-spconv                 1.2.1 [compiled]
+spconv                 1.2.1 [compiled with gcc-7.0.4]
 av                     8.0.2
 scipy                  1.5.4
 [optional] lambda-networks 0.4.0
 
 # Build modules of AdelaiDet (incl. CondInst) into DensePose
-python setup.py build develop
+`python setup.py build develop`
 
 # Build spconv (trouble-shooting)
 
@@ -24,4 +24,22 @@ If '-- The CUDA compiler identification is unknown', then add one line in the Cm
 Ref: https://github.com/traveller59/spconv/issues/21#issuecomment-495889887
 
 If 'Segmentation fault during GPU forward', it may be related to the gcc version, try 7.4.0
+Ref: https://github.com/traveller59/spconv/issues/245#issuecomment-735370682
 
+
+# Results
+## densepose_rcnn_R_50_FPN_DL_s2x 
+### ins_num=None
+`Inference done 57/1508. 0.1139 s / img. ETA=0:13:33`
+### ins_num=1
+`Inference done 76/603. 0.0848 s / img. ETA=0:02:45`
+### ins_num=14
+`Inference done 26/87. 0.1764 s / img. ETA=0:01:06`
+
+## Ours
+### ins_num=None
+`Inference done 218/1508. 0.1158 s / img. ETA=0:02:38`
+### ins_num=1
+`Inference done 330/603. 0.1062 s / img. ETA=0:00:30`
+### ins_num=14
+`Inference done 70/87. 0.1481 s / img. ETA=0:00:02`

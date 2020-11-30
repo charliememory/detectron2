@@ -1,6 +1,7 @@
 # import contextlib
 # from pycocotools.coco import COCO
 import os, pdb
+import numpy as np
 from densepose.data.datasets.coco import *
 
 
@@ -49,13 +50,14 @@ from densepose.data.datasets.coco import *
 # dataset_records = _combine_images_with_annotations(dataset_name, image_root, imgs, anns)
 
 
-data_root = "/esat/dragon/liqianma/datasets/Pose/COCO2014"
-dataset_name = "densepose_coco_2014_minival"
-annotations_fpath = os.path.join(data_root, "{}.json".format(dataset_name))
+data_root = "../../datasets/coco"
+dataset_name = "densepose_minival2014"
+annotations_fpath = os.path.join(data_root, "annotations/{}.json".format(dataset_name))
 image_root = os.path.join(data_root, "val2014")
 # annotations_fpath = maybe_prepend_base_path(datasets_root, dataset_data.annotations_fpath)
 # images_root = maybe_prepend_base_path(datasets_root, dataset_data.images_root)
 
+## Load annos
 def load_annotations():
     return load_coco_json(
         annotations_json_file=annotations_fpath,
@@ -63,6 +65,18 @@ def load_annotations():
         dataset_name=dataset_data.name,
     )
 dataset_records = load_coco_json(annotations_fpath, image_root, dataset_name)
+
+## Print statistic info
+ins_num = [len(record['annotations']) for record in dataset_records]
+ins_num = np.array(ins_num)
+img_num_of_diff_ins_num = [(ins_num==i).sum() for i in range(1,ins_num.max()+1)]
+print("max_instance_num:{}, mean_instance_num:{}".format(ins_num.max(), ins_num.mean()))
+print("img_num of {}-{} ins_num:".format(ins_num.min(),ins_num.max()), img_num_of_diff_ins_num)
+
+## Split annos according to ins_num
+for num in range(1,ins_num.max()+1):
+	dataset_records_chunk = [record for record in dataset_records if len(record['annotations'])==num]
+	
 pdb.set_trace()
 print()
 
