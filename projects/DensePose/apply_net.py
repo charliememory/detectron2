@@ -28,7 +28,8 @@ from densepose.vis.densepose_results import (
     DensePoseResultsUVisualizer,
     DensePoseResultsVVisualizer,
 )
-from densepose.vis.extractor import CompoundExtractor, create_extractor
+# from densepose.vis.extractor import CompoundExtractor, create_extractor
+from densepose.vis.extractor import CompoundExtractor, DensePoseResultExtractor, create_extractor
 
 DOC = """Apply Net - a tool to print / visualize DensePose results
 """
@@ -216,6 +217,23 @@ class DumpAction(InferenceAction):
             help="File name to save dump to",
         )
 
+    # @classmethod
+    # def execute_on_outputs(
+    #     cls: type, context: Dict[str, Any], entry: Dict[str, Any], outputs: Instances
+    # ):
+    #     image_fpath = entry["file_name"]
+    #     logger.info(f"Processing {image_fpath}")
+    #     result = {"file_name": image_fpath}
+    #     if outputs.has("scores"):
+    #         result["scores"] = outputs.get("scores").cpu()
+    #     if outputs.has("pred_boxes"):
+    #         result["pred_boxes_XYXY"] = outputs.get("pred_boxes").tensor.cpu()
+    #         if outputs.has("pred_densepose"):
+    #             # pdb.set_trace()
+    #             boxes_XYWH = BoxMode.convert(result["pred_boxes_XYXY"], BoxMode.XYXY_ABS, BoxMode.XYWH_ABS)
+    #             result["pred_densepose"] = outputs.get("pred_densepose").to_result(boxes_XYWH)
+    #     context["results"].append(result)
+
     @classmethod
     def execute_on_outputs(
         cls: type, context: Dict[str, Any], entry: Dict[str, Any], outputs: Instances
@@ -228,9 +246,7 @@ class DumpAction(InferenceAction):
         if outputs.has("pred_boxes"):
             result["pred_boxes_XYXY"] = outputs.get("pred_boxes").tensor.cpu()
             if outputs.has("pred_densepose"):
-                # pdb.set_trace()
-                boxes_XYWH = BoxMode.convert(result["pred_boxes_XYXY"], BoxMode.XYXY_ABS, BoxMode.XYWH_ABS)
-                result["pred_densepose"] = outputs.get("pred_densepose").to_result(boxes_XYWH)
+                result["pred_densepose"], _ = DensePoseResultExtractor()(outputs)
         context["results"].append(result)
 
     @classmethod
