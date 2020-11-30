@@ -318,7 +318,7 @@ cd ./dist
 pip uninstall spconv -y
 pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
 cd ~/workspace/Gitlab/detectron2/projects/DensePose
-
+ 
 # cfg_name='densepose_rcnn_R_50_FPN_s1x'
 # mode_name=${cfg_name}_BS8
 # python train_net.py --config-file configs/${cfg_name}.yaml \
@@ -357,12 +357,6 @@ cd ~/workspace/Gitlab/detectron2/projects/DensePose
 #     # SOLVER.AMP.ENABLED True \
 #     # > ./output/${mode_name}/eval_log.txt
 
-# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
-# mode_name=Base_${cfg_name}_InsSeg_1GPU
-# python train_net.py --config-file configs/${cfg_name}.yaml \
-#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
-#     # MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-#     # >> ./output/${mode_name}/eval_log.txt
 
 # cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
 # CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \
@@ -375,35 +369,52 @@ cd ~/workspace/Gitlab/detectron2/projects/DensePose
 #     SOLVER.AMP.ENABLED True \
 #     # MODEL.CONDINST.CHECKPOINT_GRAD_NUM 1\
 
-# # 49999
-# cfg_name='densepose_CondInst_R_50_s1x'
-# mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_resIUVOnly_GTinsDilated3_amp
-# python train_net.py --config-file configs/${cfg_name}.yaml \
-#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
-#     OUTPUT_DIR ./output/${mode_name} \
-#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+
+# 49999
+cfg_name='densepose_CondInst_R_50_s1x'
+mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_resIUVOnly_GTinsDilated3_amp
+python train_net.py --config-file configs/${cfg_name}_posetrack.yaml \
+    --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
+    OUTPUT_DIR ./output/${mode_name} \
+    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+    SOLVER.CHECKPOINT_PERIOD 5000 \
+    DATALOADER.NUM_WORKERS 4 \
+    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+    MODEL.CONDINST.v2 True \
+    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+    MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+    SOLVER.AMP.ENABLED True \
+    # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
+    # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+    # > ./output/${mode_name}/eval_log.txt
+
+cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
+mode_name=Base_${cfg_name}_InsSeg_1GPU
+python train_net.py --config-file configs/${cfg_name}_posetrack.yaml \
+    --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_final.pth \
+    SOLVER.AMP.ENABLED True \
+    # MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+    # >> ./output/${mode_name}/eval_log.txt
+
+# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
+# mode_name=${cfg_name}_InsSeg_amp_BS8x2_2gpu
+# python train_net.py --config-file configs/${cfg_name}_posetrack.yaml \
+#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0019999.pth \
 #     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-#     SOLVER.CHECKPOINT_PERIOD 5000 \
-#     DATALOADER.NUM_WORKERS 4 \
-#     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
-#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
-#     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-#     MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
-#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
-#     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
-#     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
-#     MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
-#     MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
-#     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
-#     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-#     MODEL.CONDINST.v2 True \
-#     MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
-#     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
 #     SOLVER.AMP.ENABLED True \
-#     MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-#     # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
-#     # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
-#     # > ./output/${mode_name}/eval_log.txt
+#     # >> ./output/${mode_name}/eval_log.txt
 
 
 # cfg_name='densepose_CondInst_R_50_s1x'
@@ -466,65 +477,65 @@ cd ~/workspace/Gitlab/detectron2/projects/DensePose
 #     # > ./output/${mode_name}/eval_log.txt
 
 
-cfg_name='densepose_CondInst_R_50_s1x'
-mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsEcaAfterRelu_resIUVOnly_GTinsDilated3_amp
-python train_net.py --config-file configs/${cfg_name}.yaml \
-    --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0059999.pth \
-    OUTPUT_DIR ./output/${mode_name} \
-    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
-    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-    SOLVER.CHECKPOINT_PERIOD 5000 \
-    DATALOADER.NUM_WORKERS 4 \
-    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
-    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
-    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
-    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
-    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
-    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
-    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
-    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
-    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
-    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-    MODEL.CONDINST.v2 True \
-    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
-    MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-    MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION "AfterRelu" \
-    SOLVER.AMP.ENABLED True \
-    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-    # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
-    # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
-    # > ./output/${mode_name}/eval_log.txt
+# cfg_name='densepose_CondInst_R_50_s1x'
+# mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsEcaAfterRelu_resIUVOnly_GTinsDilated3_amp
+# python train_net.py --config-file configs/${cfg_name}.yaml \
+#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0059999.pth \
+#     OUTPUT_DIR ./output/${mode_name} \
+#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+#     SOLVER.CHECKPOINT_PERIOD 5000 \
+#     DATALOADER.NUM_WORKERS 4 \
+#     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+#     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+#     MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+#     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+#     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+#     MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+#     MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+#     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+#     MODEL.CONDINST.v2 True \
+#     MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+#     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION "AfterRelu" \
+#     SOLVER.AMP.ENABLED True \
+#     MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+#     # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
+#     # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+#     # > ./output/${mode_name}/eval_log.txt
 
-cfg_name='densepose_CondInst_R_50_s1x'
-mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsEcaAfterConv_resIUVOnly_GTinsDilated3_amp
-python train_net.py --config-file configs/${cfg_name}.yaml \
-    --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0059999.pth \
-    OUTPUT_DIR ./output/${mode_name} \
-    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
-    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-    SOLVER.CHECKPOINT_PERIOD 5000 \
-    DATALOADER.NUM_WORKERS 4 \
-    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
-    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
-    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
-    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
-    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
-    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
-    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
-    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
-    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
-    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-    MODEL.CONDINST.v2 True \
-    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
-    MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-    MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION "AfterConv" \
-    SOLVER.AMP.ENABLED True \
-    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-    # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
-    # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
-    # > ./output/${mode_name}/eval_log.txt
+# cfg_name='densepose_CondInst_R_50_s1x'
+# mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInputInsEcaAfterConv_resIUVOnly_GTinsDilated3_amp
+# python train_net.py --config-file configs/${cfg_name}.yaml \
+#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0059999.pth \
+#     OUTPUT_DIR ./output/${mode_name} \
+#     MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+#     SOLVER.CHECKPOINT_PERIOD 5000 \
+#     DATALOADER.NUM_WORKERS 4 \
+#     MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+#     MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+#     MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+#     MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+#     MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+#     MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+#     MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+#     MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+#     MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+#     MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+#     MODEL.CONDINST.v2 True \
+#     MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+#     MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+#     MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION "AfterConv" \
+#     SOLVER.AMP.ENABLED True \
+#     MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+#     # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
+#     # MODEL.CONDINST.MASK_BRANCH.RESIDUAL_SKIP_AFTER_RELU True \
+#     # > ./output/${mode_name}/eval_log.txt
 
 
 # ./run_train_dp_5.sh
@@ -736,13 +747,6 @@ python train_net.py --config-file configs/${cfg_name}.yaml \
 #     # MODEL.CONDINST.IUVHead.GT_INSTANCES True \
 #     # >> ./output/${mode_name}/eval_log.txt
 
-# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
-# mode_name=${cfg_name}_InsSeg_amp_BS8x2_2gpu
-# python train_net.py --config-file configs/${cfg_name}.yaml \
-#     --eval-only MODEL.WEIGHTS ./output/${mode_name}/model_0019999.pth \
-#     MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-#     SOLVER.AMP.ENABLED True \
-#     # >> ./output/${mode_name}/eval_log.txt
 
 # cfg_name='densepose_CondInst_R_50_s1x'
 # mode_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrueResInput_GTinsDilated3_amp_BS2x8_2gpu
