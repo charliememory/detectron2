@@ -277,31 +277,31 @@ source ~/.bashrc_liqianma
 #     # MODEL.CONDINST.MASK_BRANCH.USE_ASPP True
 #     # MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER 1 \
 
-if [ -d "/usr/local/cuda-10.2/bin" ] 
-then
-    echo "/usr/local/cuda-10.2/bin exists." 
-else
-    echo "/usr/local/cuda-10.2/bin does not exists. Use cuda-11.1"
-    export CUDA_HOME=/usr/local/cuda-11.1
-    export CUDNN_HOME=/esat/dragon/liqianma/workspace/cudnn-11.1-linux-x64-v8.0.4.30
-    export PATH=$CUDA_HOME/bin:$PATH 
-    # for torch
-    export CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME
-    export CUDA_BIN_PATH=$CUDA_HOME
-    # libs for deep learning framework
-    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
-    # for CUDA & atlas
-    export CUDNN_INCLUDE="$CUDNN_HOME/include"
-    export CUDNN_INCLUDE_DIR="$CUDNN_HOME/include"
-    export INCLUDE_DIR="$CUDA_HOME/include:$CUDNN_HOME/include:$INCLUDE_DIR"
-fi
-cd ~/workspace/Gitlab/spconv/
-rm -rf build
-python setup.py bdist_wheel
-cd ./dist
-pip uninstall spconv -y
-pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
-cd ~/workspace/Gitlab/detectron2/projects/DensePose
+# if [ -d "/usr/local/cuda-10.2/bin" ] 
+# then
+#     echo "/usr/local/cuda-10.2/bin exists." 
+# else
+#     echo "/usr/local/cuda-10.2/bin does not exists. Use cuda-11.1"
+#     export CUDA_HOME=/usr/local/cuda-11.1
+#     export CUDNN_HOME=/esat/dragon/liqianma/workspace/cudnn-11.1-linux-x64-v8.0.4.30
+#     export PATH=$CUDA_HOME/bin:$PATH 
+#     # for torch
+#     export CUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME
+#     export CUDA_BIN_PATH=$CUDA_HOME
+#     # libs for deep learning framework
+#     export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64:$LD_LIBRARY_PATH"
+#     # for CUDA & atlas
+#     export CUDNN_INCLUDE="$CUDNN_HOME/include"
+#     export CUDNN_INCLUDE_DIR="$CUDNN_HOME/include"
+#     export INCLUDE_DIR="$CUDA_HOME/include:$CUDNN_HOME/include:$INCLUDE_DIR"
+# fi
+# cd ~/workspace/Gitlab/spconv/
+# rm -rf build
+# python setup.py bdist_wheel
+# cd ./dist
+# pip uninstall spconv -y
+# pip install spconv-1.2.1-cp38-cp38-linux_x86_64.whl
+# cd ~/workspace/Gitlab/detectron2/projects/DensePose
  
 # cfg_name='densepose_CondInst_R_50_s1x'
 # CUDA_LAUNCH_BLOCKING=1 python train_net.py --config-file configs/${cfg_name}.yaml \

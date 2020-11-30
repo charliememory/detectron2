@@ -50,12 +50,15 @@ from densepose.data.datasets.coco import *
 # dataset_records = _combine_images_with_annotations(dataset_name, image_root, imgs, anns)
 
 
-data_root = "../../datasets/coco"
-dataset_name = "densepose_minival2014"
-annotations_fpath = os.path.join(data_root, "annotations/{}.json".format(dataset_name))
-image_root = os.path.join(data_root, "val2014")
-# annotations_fpath = maybe_prepend_base_path(datasets_root, dataset_data.annotations_fpath)
-# images_root = maybe_prepend_base_path(datasets_root, dataset_data.images_root)
+# data_root = "../../datasets/coco"
+# dataset_name = "densepose_minival2014"
+# annotations_fpath = os.path.join(data_root, "annotations/{}.json".format(dataset_name))
+# image_root = os.path.join(data_root, "val2014")
+
+data_root = "../../datasets/posetrack2017"
+dataset_name = "densepose_posetrack_val2017"
+annotations_fpath = os.path.join(data_root, "{}.json".format(dataset_name))
+image_root = os.path.join(data_root, "posetrack_data_2017")
 
 ## Load annos
 def load_annotations():
@@ -73,9 +76,9 @@ img_num_of_diff_ins_num = [(ins_num==i).sum() for i in range(1,ins_num.max()+1)]
 print("max_instance_num:{}, mean_instance_num:{}".format(ins_num.max(), ins_num.mean()))
 print("img_num of {}-{} ins_num:".format(ins_num.min(),ins_num.max()), img_num_of_diff_ins_num)
 
-## Split annos according to ins_num
-for num in range(1,ins_num.max()+1):
-	dataset_records_chunk = [record for record in dataset_records if len(record['annotations'])==num]
+# ## Split annos according to ins_num
+# for num in range(1,ins_num.max()+1):
+# 	dataset_records_chunk = [record for record in dataset_records if len(record['annotations'])==num]
 	
 pdb.set_trace()
 print()

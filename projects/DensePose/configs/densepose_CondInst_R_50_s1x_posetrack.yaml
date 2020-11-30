@@ -21,4 +21,7 @@ MODEL:
 SOLVER:
   MAX_ITER: 130000
   STEPS: (100000, 120000)
-  
+
+
+DATASETS:
+  TEST: ("posetrack2017_val",) 
