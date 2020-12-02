@@ -51,7 +51,7 @@ class InsGNBNIN(nn.Module):
                 
                 try:
                     fea = x[n,:,(ins_indices_batch[n]==i).nonzero()].permute([1,0,2])
-                    x[n,:,(ins_indices_batch[n]==i).nonzero()] = self.norm(fea).permute([1,0,2])
+                    x[n,:,(ins_indices_batch[n]==i).nonzero()] = self.norm(fea).permute([1,0,2]).type(x.dtype)
                     # out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
                     # x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
                 except Exception as e:
