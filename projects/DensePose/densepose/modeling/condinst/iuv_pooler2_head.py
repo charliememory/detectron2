@@ -60,6 +60,7 @@ class Decoder(nn.Module):
         norm                  = cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_NORM
         num_lambda_layer = cfg.MODEL.CONDINST.IUVHead.NUM_LAMBDA_LAYER
         lambda_layer_r = cfg.MODEL.CONDINST.IUVHead.LAMBDA_LAYER_R
+        self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
         # fmt: on
 
         self.scale_heads = []
@@ -138,8 +139,39 @@ class Decoder(nn.Module):
         if rel_coord is not None or abs_coord is not None:
             x = self.comb_pe_conv(x)
         x = x * fg_mask
-        x = self.densepose_head(x)
+
+
+        if self.use_ins_gn:
+            ## dense to sparse
+            N, C, H, W = x.shape
+            coord = compute_grid(H, W, device=x.device, norm=False)
+            # sparse_coord_batch = []
+            # sparse_feat_batch = []
+            ins_indices_batch = []
+            # ins_indices_len = []
+            # ins_cnt = 0
+            for n in range(N):
+                # m = fg_mask[n:n+1]
+                x_indices = coord[0]
+                y_indices = coord[1]
+                # pdb.set_trace()
+                # bg_and_ins = torch.cat([m[0],ins_mask_list[n].float()], dim=0)
+                # ins_indices = torch.argmax(bg_and_ins, dim=0)[m[0,0]>0] + ins_cnt
+                # try:
+                # pdb.set_trace()
+                logit_bg_fg = torch.cat([(1-fg_mask[n])*99999., ins_mask_list[n].float()], dim=0)
+                ins_indices = torch.argmax(logit_bg_fg, dim=0) - 1 ## set bg to -1
+                ins_indices[ins_indices>=0] = ins_indices[ins_indices>=0] #+ ins_cnt
+                ins_indices_batch.append(ins_indices)
+                # ins_cnt += ins_mask_list[n].shape[0] - 1 ## exclude bg class
+
+            ins_indices_batch = torch.stack(ins_indices_batch,dim=0)
+
+            x = self.densepose_head(x, ins_indices_batch)
+        else:
+            x = self.densepose_head(x)
         x = self.predictor(x)
+
         return x
 
 

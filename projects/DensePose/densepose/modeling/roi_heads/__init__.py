@@ -2,6 +2,7 @@
 
 from .v1convx import DensePoseV1ConvXHead
 from .v1convxgn import DensePoseV1ConvXGNHead
+from .v1convxgn_ins import DensePoseV1ConvXGNInsHead
 from .v1convxgn_sparse import DensePoseV1ConvXGNSparseHead
 from .v1convxgn_sparsegn import DensePoseV1ConvXGNSparseGNHead
 from .v1convxgn_sparsegn_esp import DensePoseV1ConvXGNSparseGNESPHead

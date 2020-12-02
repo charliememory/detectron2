@@ -43,3 +43,17 @@ Ref: https://github.com/traveller59/spconv/issues/245#issuecomment-735370682
 `Inference done 330/603. 0.1062 s / img. ETA=0:00:30`
 ### ins_num=14
 `Inference done 70/87. 0.1481 s / img. ETA=0:00:02`
+
+
+# PoseTrack Results
+## Official results https://github.com/facebookresearch/DensePose/tree/master/PoseTrack
+
+## densepose_rcnn_R_50_FPN_DL_s2x
+Total inference time: 0:07:34.423428 (0.584844 s / img per device, on 1 devices)
+Total inference pure compute time: 0:01:23 (0.107573 s / img per device, on 1 devices)
+
+## Ours
+Total inference time: 0:02:12.386951 (0.170382 s / img per device, on 1 devices)
+Total inference pure compute time: 0:01:43 (0.133565 s / img per device, on 1 devices)
+
+
