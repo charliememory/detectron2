@@ -244,14 +244,16 @@ class CoordGlobalIUVPooler2Head(nn.Module):
 
         if self.training:
             features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
+            features_dp_ori = features[0]
             proposal_boxes = [x.gt_boxes for x in gt_instances]
             features_dp = self.densepose_pooler(features, proposal_boxes)
             iuv_logits = features_dp
             # iuv_logit_global = features[0]
-            return None, iuv_logits
+            return None, iuv_logits, features_dp_ori
         else:
             features = [self.decoder(features, iuv_feats, rel_coord, abs_coord, fg_mask, ins_mask_list)]
             # pdb.set_trace()
+            features_dp_ori = features[0]
 
             if self.inference_global_siuv:
                 iuv_logits = features[0]
@@ -283,7 +285,7 @@ class CoordGlobalIUVPooler2Head(nn.Module):
         #     iuv_logit_global = features[0]
 
 
-            return coarse_segm, iuv_logits
+            return coarse_segm, iuv_logits, features_dp_ori
 
 
 

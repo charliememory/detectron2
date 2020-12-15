@@ -50,8 +50,10 @@ class FocalLoss(nn.Module):
             logpt = logpt * Variable(at)
 
         loss = -1 * (1-pt)**self.gamma * logpt
+        # if self.size_average: return loss.mean()
+        # else: return loss.sum()
         if self.size_average: return loss.mean()
-        else: return loss.sum()
+        else: return loss
 
 
 def _linear_interpolation_utilities(v_norm, v0_src, size_src, v0_dst, size_dst, size_z):

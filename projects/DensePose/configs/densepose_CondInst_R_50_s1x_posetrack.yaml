@@ -24,4 +24,5 @@ SOLVER:
 
 
 DATASETS:
+  TRAIN: ("posetrack2017_train",) 
   TEST: ("posetrack2017_val",) 

@@ -87,6 +87,8 @@ class DatasetMapper:
         if self.use_gt_skeleton:
             self.keypoint_on = True
 
+        self.infer_smooth_frame_num = cfg.MODEL.INFERENCE_SMOOTH_FRAME_NUM
+
     def __call__(self, dataset_dict):
         """
         Args:
@@ -102,6 +104,37 @@ class DatasetMapper:
         image, transforms = T.apply_transform_gens(self.augmentation, image)
         image_shape = image.shape[:2]  # h, w
         dataset_dict["image"] = torch.as_tensor(image.transpose(2, 0, 1).astype("float32"))
+
+        # pdb.set_trace()
+        if self.infer_smooth_frame_num>0:
+            # assert "frame_" in dataset_dict["file_name"], "we use ## to separate name and frame num"
+            if "frame_" in dataset_dict["file_name"]:
+                ## filename format from ffmpeg
+                name, fid = dataset_dict["file_name"].split("frame_")
+                name = name + "frame_"
+            else:
+                ## filename format from posetrack
+                split_list = dataset_dict["file_name"].split("/")
+                name = "/".join(split_list[:-1])
+                name = name + "/"
+                fid = split_list[-1]
+
+            # num_len = len(fid)
+            # file_name = dataset_dict["file_name"]
+            image_adj_list = []
+            for i in range(self.infer_smooth_frame_num):
+                fid_adj = str(max(0,int(fid)-i))
+                fid_adj = "".join(["0"]*(len(fid)-len(fid_adj))) + fid_adj
+                file_name = name + fid_adj
+                try:
+                    image_adj = utils.read_image(file_name, format=self.img_format)
+                    image_adj, _ = T.apply_transform_gens(self.augmentation, image_adj)
+                except:
+                    print("image does not exist:", file_name)
+                    image_adj = image
+                image_adj_list.append(torch.as_tensor(image_adj.transpose(2, 0, 1).astype("float32")))
+            dataset_dict["image_adj_list"] = image_adj_list
+
 
         # if not self.is_train:
         if not self.is_train and not self.use_gt_ins and not self.use_gt_skeleton:
@@ -158,7 +191,7 @@ class DatasetMapper:
             if kpts.sum()!=0:
                 # assert obj['densepose'] is not None
                 ske_feat = genSkeletons(kpts[None,...], image_shape[0], image_shape[1], 
-                        stride=self.mask_out_stride, sigma=3, threshold=1, visdiff = True).transpose(2, 0, 1)
+                        stride=self.mask_out_stride, sigma=7, threshold=1, visdiff = True).transpose(2, 0, 1)
                 # ske_feat = genSkeletons(kpts[None,...], image_shape[0], image_shape[1], 
                 #         stride=1, sigma=5, threshold=3, visdiff = True).transpose(2, 0, 1)
                 # obj["skeleton_feat"] = torch.from_numpy(ske_feat)

@@ -12,10 +12,11 @@ import torch
 
 # from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
-from detectron2.engine.defaults import DefaultPredictor
 from detectron2.structures.boxes import BoxMode
 from detectron2.structures.instances import Instances
 from detectron2.utils.logger import setup_logger
+# from detectron2.engine.defaults import DefaultPredictor
+from densepose.engine.defaults import DefaultPredictor
 
 # from densepose import add_densepose_config, add_hrnet_config
 from densepose.config import get_cfg, add_densepose_config, add_hrnet_config
@@ -67,7 +68,7 @@ class InferenceAction(Action):
         parser.add_argument("cfg", metavar="<config>", help="Config file")
         parser.add_argument("model", metavar="<model>", help="Model file")
         parser.add_argument("input", metavar="<input>", help="Input data")
-        parser.add_argument("--smooth_k", type=int, default=0, metavar="<smooth_k>", help="smooth_k")
+        # parser.add_argument("--smooth_k", type=int, default=0, metavar="<smooth_k>", help="smooth_k")
         parser.add_argument(
             "--opts",
             help="Modify config options using the command-line 'KEY VALUE' pairs",
@@ -88,19 +89,33 @@ class InferenceAction(Action):
             logger.warning(f"No input images for {args.input}")
             return
         context = cls.create_context(args)
+        smooth_radius = cfg.MODEL.INFERENCE_SMOOTH_FRAME_NUM
         # cnt = 0
-        for file_name in tqdm.tqdm(file_list):
+        for fid in tqdm.tqdm(range(len(file_list))):
+            file_name = file_list[fid]
             # cnt += 1
             # if cnt<50:
             #     continue
-            img = read_image(file_name, format="BGR")  # predictor expects BGR image.
-            with torch.no_grad():
-                outputs = predictor(img)["instances"]
-                # pdb.set_trace()
-                if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
-                    outputs = cls.seperate_global_siuv(outputs)
+            # pdb.set_trace()
+            if smooth_radius>0:
+                img = read_image(file_name, format="BGR")  # predictor expects BGR image.
+                image_adj_list = []
+                for i in range(-smooth_radius, smooth_radius+1):
+                    if i==0:
+                        continue
+                    ii = min(len(file_list)-1, max(0,fid+i))
+                    image_adj_list.append(read_image(file_list[ii], format="BGR"))
+                with torch.no_grad():
+                    outputs = predictor(img, image_adj_list)["instances"]
+            else:
+                img = read_image(file_name, format="BGR")  # predictor expects BGR image.
+                with torch.no_grad():
+                    outputs = predictor(img)["instances"]
 
-                cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
+            if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
+                outputs = cls.seperate_global_siuv(outputs)
+
+            cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, outputs)
                 
             torch.cuda.empty_cache()
         cls.postexecute(context)
@@ -165,7 +180,7 @@ class InferenceAction(Action):
         ## MLQ added
         cfg.MODEL.DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
         cfg.DATA_DIR = os.path.dirname(args.input)
-        cfg.SMOOTH_K = args.smooth_k
+        # cfg.SMOOTH_K = args.smooth_k
         cfg.freeze()
         return cfg
 

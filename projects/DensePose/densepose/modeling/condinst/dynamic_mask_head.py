@@ -443,7 +443,10 @@ class DynamicMaskHead(nn.Module):
             rel_coord_gt[idx:idx+1] = coord #.reshape(1, 2, H, W)
             # if 0==gt_bitmasks[cnt:cnt+num,0].shape[0]:
             #     pdb.set_trace()
-            ins_mask_list.append(gt_bitmasks[cnt:cnt+num,0])
+            ins_mask = gt_bitmasks[cnt:cnt+num,0]
+
+            valid_idxs = ins_mask.sum(dim=[1,2]) > 0
+            ins_mask_list.append(ins_mask[valid_idxs])
             cnt += num
             # pdb.set_trace()
         return rel_coord_gt, ins_mask_list
@@ -466,9 +469,28 @@ class DynamicMaskHead(nn.Module):
         return ins_mask_list
 
     def __call__(self, iuv_head_func, fpn_features, mask_feats, iuv_feats, mask_feat_stride, pred_instances, 
-            gt_instances=None, mask_out_bg_feats="none", pred_instances_nms=None):
-        torch.cuda.empty_cache()
+            gt_instances=None, mask_out_bg_feats="none", pred_instances_nms=None, images=None, skeleton_feats_gt=None):
+        # torch.cuda.empty_cache()
         if self.training:
+            # if not self.segm_trained_by_masks:
+            #     start = int(self.mask_out_stride // 2)
+            #     for i in range(len(gt_instances)):
+            #         N_ins = len(gt_instances[i])
+            #         H,W = gt_instances[i].image_size
+            #         boxes_xyxy = gt_instances[i].gt_boxes.tensor
+            #         bitmasks_full = torch.zeros([N_ins,1,H,W], dtype=mask_feats.dtype, device=mask_feats.device)
+            #         for j in range(len(gt_instances[i].gt_densepose)):
+            #             if gt_instances[i].gt_densepose[j] is not None:
+            #                 x1,y1,x2,y2 = boxes_xyxy[j].int()
+            #                 bitmasks_full[j,0,y1:y2,x1:x2] = F.interpolate(gt_instances[i].gt_densepose[j].segm[None,None,...], (y2-y1,x2-x1), mode="nearest")[0,0]
+
+
+            #         bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
+            #         gt_instances[i].set('gt_bitmasks', bitmasks)
+            #         gt_instances[i].set('gt_bitmasks_full', bitmasks_full)
+
+            #     # pdb.set_trace()
+
             gt_inds = pred_instances.gt_inds
             gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
             gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
@@ -664,7 +686,7 @@ class DynamicMaskHead(nn.Module):
                     # if mask_out_bg_feats != "none":
                     #     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
                     # else:
-                    _, iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
+                    _, iuv_logits, features_dp_ori = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
                     coarse_segm = s_logits
                     # iuv_logits = iuv_feats[:1,:75,:112,:112].expand_as(iuv_logits)
 
@@ -686,11 +708,12 @@ class DynamicMaskHead(nn.Module):
                                                                         fine_segm=iuv_logits[:,:25],
                                                                         u=iuv_logits[:,25:50],
                                                                         v=iuv_logits[:,50:75],
-                                                                        aux_supervision=iuv_logits[:,75:],
+                                                                        aux_supervision=features_dp_ori[:,75:],
                                                                         stride=self.mask_out_stride,
                                                                      )
                     for i in range(len(gt_instances)):
                         gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
+                        # gt_instances[i].set('pred_classes', torch.tensor([0]*len(gt_instances[i]), device=s_logits.device))
 
                     # pdb.set_trace()
                     
@@ -698,10 +721,10 @@ class DynamicMaskHead(nn.Module):
                     # if len(gt_instances)!=len(proposals):
                     #     pdb.set_trace()
                     densepose_loss_dict = self.densepose_losses(
-                        gt_instances, densepose_outputs, gt_bitmasks
+                        gt_instances, densepose_outputs, gt_bitmasks, images=images, skeleton_feats_gt=skeleton_feats_gt
                     )
                     losses.update(densepose_loss_dict)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             return losses
 
         else:
@@ -841,7 +864,7 @@ class DynamicMaskHead(nn.Module):
                 # else:
                 # if self.inference_global_siuv:
                     # coarse_segm = s_logits
-                coarse_segm, iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
+                coarse_segm, iuv_logits, features_dp_ori = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
                 
                 # import imageio
                 # for i in range(coarse_segm.shape[0]):

@@ -200,7 +200,7 @@ class DefaultPredictor:
         self.input_format = cfg.INPUT.FORMAT
         assert self.input_format in ["RGB", "BGR"], self.input_format
 
-    def __call__(self, original_image):
+    def __call__(self, original_image, image_adj_list=[]):
         """
         Args:
             original_image (np.ndarray): an image of shape (H, W, C) (in BGR order).
@@ -210,6 +210,7 @@ class DefaultPredictor:
                 the output of the model for one image only.
                 See :doc:`/tutorials/models` for details about the format.
         """
+        # import pdb; pdb.set_trace()
         with torch.no_grad():  # https://github.com/sphinx-doc/sphinx/issues/4258
             # Apply pre-processing to image.
             if self.input_format == "RGB":
@@ -219,7 +220,17 @@ class DefaultPredictor:
             image = self.aug.get_transform(original_image).apply_image(original_image)
             image = torch.as_tensor(image.astype("float32").transpose(2, 0, 1))
 
-            inputs = {"image": image, "height": height, "width": width}
+            for i in range(len(image_adj_list)):
+                image_adj = image_adj_list[i]
+                if self.input_format == "RGB":
+                    # whether the model expects BGR inputs or RGB
+                    image_adj = image_adj[:, :, ::-1]
+                # import pdb; pdb.set_trace()
+                image_adj = self.aug.get_transform(image_adj).apply_image(image_adj)
+                image_adj = torch.as_tensor(image_adj.astype("float32").transpose(2, 0, 1))
+                image_adj_list[i] = image_adj
+
+            inputs = {"image": image, "height": height, "width": width, "image_adj_list":image_adj_list}
             predictions = self.model([inputs])[0]
             return predictions
 

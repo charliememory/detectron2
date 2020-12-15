@@ -1,4 +1,4 @@
-from .deform_conv import DFConv2d
+from .deform_conv import DFConv2d, DeformBottleneckBlock
 from .ml_nms import ml_nms
 from .iou_loss import IOULoss
 from .conv_with_kaiming_uniform import conv_with_kaiming_uniform

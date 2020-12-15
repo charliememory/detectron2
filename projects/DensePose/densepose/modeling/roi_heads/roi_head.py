@@ -187,6 +187,7 @@ class DensePoseROIHeads(StandardROIHeads):
             densepose_inference(densepose_predictor_outputs, instances)
             return instances
 
+    "To remove"
     def _forward_densepose_smooth_save(self, features: Dict[str, torch.Tensor], instances: List[Instances]):
         """
         Forward logic of the densepose prediction branch.

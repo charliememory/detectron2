@@ -18,13 +18,11 @@ MODEL:
     PREDICTOR_NAME: "DensePoseChartPredictor"
     LOSS_NAME: "DensePoseChartGlobalIUVSeparatedSLoss"
     NUM_COARSE_SEGM_CHANNELS: 1
-# SOLVER:
-#   MAX_ITER: 130000
-#   STEPS: (100000, 120000)
 SOLVER:
-  # MAX_ITER: 190000
-  # STEPS: (100000, 160000)
   MAX_ITER: 390000
   STEPS: (300000, 360000)
-  # MAX_ITER: 480000
-  # STEPS: (300000, 420000)
+
+
+DATASETS:
+  TRAIN: ("posetrack2017_train",) 
+  TEST: ("posetrack2017_val",) 

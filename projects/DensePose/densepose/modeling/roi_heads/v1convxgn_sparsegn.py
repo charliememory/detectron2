@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 from typing import Dict, List, Optional, Any
-import torch, pdb
+import torch, pdb, math
 from torch import nn
 from torch.nn import functional as F
 import torch.utils.checkpoint as checkpoint
@@ -31,15 +31,11 @@ from .registry import ROI_DENSEPOSE_HEAD_REGISTRY
 
 #         return spconv.SparseConvTensor(torch.cat(out_batch, dim=0), indices, (H,W), batch_size)
 
-class SparseInsGNBNIN(nn.Module):
-    def __init__(self, num_groups, out_channels, norm):
-        super(SparseInsGNBNIN, self).__init__()
-        if norm=="InsGN":
-            self.norm = nn.GroupNorm(num_groups, out_channels)
-        elif norm=="InsBN":
-            self.norm = nn.BatchNorm1d(out_channels)
-        elif norm=="InsIN":
-            self.norm = nn.InstanceNorm1d(out_channels)
+"TODO"
+class SparseInsDilateConv(nn.Module):
+    def __init__(self, num_groups, out_channels):
+        super(SparseInsDilateConv, self).__init__()
+
 
     # def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any, ins_indices_len):
     def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any):
@@ -60,6 +56,51 @@ class SparseInsGNBNIN(nn.Module):
         # return x
 
         for i in ins_ids:
+            # # pdb.set_trace()
+            # try:
+            #     out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
+            #     x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
+            # except Exception as e:
+            #     print(e)
+            #     # print((ins_indices_batch==i).nonzero())
+            #     # pdb.set_trace()
+
+            "TODO: dilation depends on instance size"
+            pdb.set_trace()
+            outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(
+                x.indices[(ins_indices_batch==i).nonzero(),],
+                x.batch_size,
+                x.spatial_shape,
+                kernel_size=3,
+                stride=1,
+                padding=0,
+                dilation=d,
+                )
+            x.indice_dict["ins_dilate"] = (outids, x.indices,
+                                                  indice_pairs,
+                                                  indice_pair_num,
+                                                  x.spatial_shape)
+
+
+
+
+        return x
+
+class SparseInsGNBNIN(nn.Module):
+    def __init__(self, num_groups, out_channels, norm):
+        super(SparseInsGNBNIN, self).__init__()
+        if norm=="InsGN":
+            self.norm = nn.GroupNorm(num_groups, out_channels)
+        elif norm=="InsBN":
+            self.norm = nn.BatchNorm1d(out_channels)
+        elif norm=="InsIN":
+            self.norm = nn.InstanceNorm1d(out_channels)
+
+    # def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any, ins_indices_len):
+    def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any):
+        N, C = x.features.shape
+        out_batch = []
+        for i in ins_ids:
             # pdb.set_trace()
             try:
                 out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
@@ -69,25 +110,6 @@ class SparseInsGNBNIN(nn.Module):
                 # print((ins_indices_batch==i).nonzero())
                 # pdb.set_trace()
         return x
-
-
-        # for i in ins_ids:
-        #     out = self.norm(x.features[ins_indices_batch==i].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
-        #     x.features[ins_indices_batch==i] = out.permute([2,0,1]).reshape(-1)
-        # return x
-
-        # N, C = x.features.shape
-        # out_batch = self.bn(x.features.reshape([-1,1,C]).permute([1,2,0]))
-        # return spconv.SparseConvTensor(out_batch.permute([2,0,1]).reshape([-1,C]), 
-        #                 x.indices, x.spatial_shape, x.batch_size)
-
-
-
-        # batch_indices = x.indices[:,:1].expand_as(x.features)
-        # for i in range(x.batch_size):
-        #     # pdb.set_trace()
-        #     out = self.gn(x.features[batch_indices==i].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
-        #     out_batch.append(out.permute([2,0,1]).reshape([-1,C]))
 
 
 class SparseGNBN(nn.Module):
@@ -118,7 +140,9 @@ class SparseReLU(nn.Module):
         self.inplace = inplace
 
     def forward(self, x: spconv.SparseConvTensor):
-        return spconv.SparseConvTensor(F.relu(x.features, inplace=self.inplace), x.indices, x.spatial_shape, x.batch_size)
+        x.features = F.relu(x.features, inplace=self.inplace)
+        return x
+        # return spconv.SparseConvTensor(F.relu(x.features, inplace=self.inplace), x.indices, x.spatial_shape, x.batch_size)
 
 
 class Conv1dWS(nn.Conv1d):
@@ -243,6 +267,7 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         norm                 = cfg.MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM
         self.n_stacked_convs = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_STACKED_CONVS
         self.use_ins_gn      = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
+        self.use_ins_conv    = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_CONV
         self.use_weight_std  = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
         # self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
         self.use_eca = False
@@ -250,9 +275,11 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         self.use_res_input    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_INPUT
         self.use_res_after_relu    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_AFTER_RELU
         self.use_res_later   = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER
-        self.use_dilated_conv = cfg.MODEL.CONDINST.IUVHead.DILATION_CONV
+        self.dilated_conv_type = cfg.MODEL.CONDINST.IUVHead.DILATION_CONV
+        self.dilated_conv_r_max = cfg.MODEL.CONDINST.IUVHead.DILATION_CONV_R_MAX
         self.add_sparse = spconv.tables.AddTable()
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
+        # self.replace_minus_one = cfg.MODEL.CONDINST.IUVHead.REPLACE_MINUS_ONE
         assert self.use_ins_gn
         # fmt: on
         # pad_size = kernel_size // 2
@@ -264,33 +291,176 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                                 use_submconv=True, use_deconv=False, use_weight_std=self.use_weight_std)
             cnt = 0
             self.layers = []
+            self.pad = 0
             for i in range(self.n_stacked_convs):
-                if self.use_dilated_conv:
-                    if i==3:
-                        r = 2
-                    elif i==4:
-                        r = 4
-                    elif i==5:
-                        r = 8
+                if self.dilated_conv_type=="one_layer_ori":
+                    if i in [3]:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=self.dilated_conv_r_max,
+                            indice_key="subm0_insconv_adapt",
+                        )
                     else:
-                        r = 1
-                    layer = conv(
-                        n_channels,
-                        hidden_dim,
-                        kernel_size,
-                        stride=1,
-                        dilation=r,
-                        indice_key="subm0",
-                    )
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm0_insconv",
+                        )
+                elif self.dilated_conv_type=="progressive_ori":
+                    if i==3:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm0_insconv_adapt",
+                        )
+                    elif i==6:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm1_insconv_adapt",
+                        )
+                    elif i==9:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm2_insconv_adapt",
+                        )
+                    else:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm0_insconv",
+                        )
                 else:
-                    layer = conv(
-                        n_channels,
-                        hidden_dim,
-                        kernel_size,
-                        stride=1,
-                        dilation=1,
-                        indice_key="subm0",
-                    )
+                    if i<12:
+                        layer = conv(
+                            n_channels,
+                            hidden_dim,
+                            kernel_size,
+                            stride=1,
+                            padding=self.pad,
+                            dilation=1,
+                            indice_key="subm0",
+                        )
+                    else:
+                        if self.dilated_conv_type=="none":
+                            layer = conv(
+                                n_channels,
+                                hidden_dim,
+                                kernel_size,
+                                stride=1,
+                                padding=self.pad,
+                                dilation=1,
+                                indice_key="subm0",
+                            )
+                        elif self.dilated_conv_type=="one_layer":
+                            if i in [12]:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=self.dilated_conv_r_max,
+                                    indice_key="subm0_insconv_adapt",
+                                )
+                            else:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=1,
+                                    indice_key="subm0_insconv",
+                                )
+                        # elif self.dilated_conv_type=="all_layers":
+                        #     if i>2:
+                        #         layer = conv(
+                        #             n_channels,
+                        #             hidden_dim,
+                        #             kernel_size,
+                        #             stride=1,
+                        #             padding=self.pad,
+                        #             dilation=1,
+                        #             indice_key="subm0_adapt",
+                        #         )
+                        #     else:
+                        #         layer = conv(
+                        #             n_channels,
+                        #             hidden_dim,
+                        #             kernel_size,
+                        #             stride=1,
+                        #             padding=self.pad,
+                        #             dilation=1,
+                        #             indice_key="subm0",
+                        #         )
+                        elif self.dilated_conv_type=="progressive":
+                            if i==12:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=1,
+                                    indice_key="subm0_insconv_adapt",
+                                )
+                            elif i==15:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=1,
+                                    indice_key="subm1_insconv_adapt",
+                                )
+                            elif i==18:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=1,
+                                    indice_key="subm2_insconv_adapt",
+                                )
+                            else:
+                                layer = conv(
+                                    n_channels,
+                                    hidden_dim,
+                                    kernel_size,
+                                    stride=1,
+                                    padding=self.pad,
+                                    dilation=1,
+                                    indice_key="subm0_insconv",
+                                )
+
                 # layer_name = self._get_layer_name(cnt)
                 self.add_module("layer{}".format(cnt), layer)
                 self.layers.append(layer)
@@ -365,6 +535,120 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
     #         inputs = module(inputs[0])
     #         return inputs
     #     return custom_forward
+    def rearrange_inputs(self, x, ins_indices_batch, ins_ids):
+        x_features_list =[]
+        x_indices_list =[]
+        ins_indices_list = []
+        for i in ins_ids:
+            x_features_list.append(x.features[(ins_indices_batch==i).nonzero()].squeeze(1))
+            x_indices_list.append(x.indices[(ins_indices_batch==i).nonzero()].squeeze(1))
+            ins_indices_list.append(ins_indices_batch[ins_indices_batch==i])
+        x.features = torch.cat(x_features_list, dim=0)
+        x.indices = torch.cat(x_indices_list, dim=0)
+        ins_indices_batch = torch.cat(ins_indices_list,dim=0)
+        return x, ins_indices_batch
+
+
+    def create_dilated_indices(self, x, ins_indices_batch, ins_ids, dilation_max, ksize=3):
+        features_list =[]
+        ins_indices_list = []
+        outids_list =[]
+        indice_pairs_list = []
+        indice_pair_num_list = []
+        cnt = 0
+        for i in ins_ids:
+            # # pdb.set_trace()
+            # try:
+            #     out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
+            #     x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
+            # except Exception as e:
+            #     print(e)
+            #     # print((ins_indices_batch==i).nonzero())
+            #     # pdb.set_trace()
+
+            "TODO: dilation depends on instance size"
+            ins_indices = x.indices[(ins_indices_batch==i).nonzero()].squeeze(1)
+            h_ratio = (ins_indices[:,1].max() - ins_indices[:,1].min()).float()/x.spatial_shape[0]
+            w_ratio = (ins_indices[:,2].max() - ins_indices[:,2].min()).float()/x.spatial_shape[1]
+            d = max(1, math.ceil(max(h_ratio, w_ratio)*dilation_max))
+            
+            # outids0, indice_pairs0, indice_pair_num0 = spconv.ops.get_indice_pairs(x.indices, x.batch_size, x.spatial_shape, ksize=3, stride=1, padding=0, dilation=1,subm=True)
+            # try:
+            outids, indice_pairs, indice_pair_num = spconv.ops.get_indice_pairs(
+                ins_indices,
+                x.batch_size,
+                x.spatial_shape,
+                ksize=ksize,
+                stride=1,
+                padding=self.pad,
+                dilation=d,
+                out_padding=0,
+                subm=True,
+                transpose=False,
+                grid=None,
+                use_hash=False,
+                )
+            # pdb.set_trace()
+            # outids[:,0] = i
+            # except:
+            indice_pairs[indice_pairs!=-1] += cnt
+
+            """
+            Replace -1 with center pixel value to avoid CUDA error: an illegal memory access was encountered.
+            Because, for each instance, there are -1 in the end of indice_pairs. When combining more than one
+            instance, there will be -1 in the middle which causes CUDA memory error.
+            """
+            # if i==0:
+            #     pdb.set_trace()
+            # center = (indice_pairs.shape[1]-1)//2
+            center = torch.argmax(indice_pair_num)
+            for t in range(indice_pairs.shape[1]):
+                if t!=center:
+                    replace_idx = indice_pairs[0,t,:]==-1
+                    indice_pairs[:,t,replace_idx] = indice_pairs[:,center,replace_idx]
+                    # indice_pair_num[t] = indice_pair_num[center]
+            valid_idx = indice_pairs[0,center,:]!=-1
+            outids = outids[valid_idx]
+            indice_pairs = indice_pairs[:,:,valid_idx]
+            indice_pair_num = indice_pair_num*0 + valid_idx.int().sum()
+            # if i==0:
+            #     pdb.set_trace()
+
+            # "Divide according to indice_pair_num"
+
+            # ins_indices_list.append(ins_indices)
+            outids_list.append(outids)
+            indice_pairs_list.append(indice_pairs)
+            indice_pair_num_list.append(indice_pair_num)
+            cnt += (ins_indices_batch==i).int().sum()
+
+        # ins_indices = torch.cat(ins_indices_list, dim=0)
+        outids = torch.cat(outids_list, dim=0)
+        indice_pairs = torch.cat(indice_pairs_list, dim=-1)
+        indice_pair_num = torch.stack(indice_pair_num_list).sum(dim=0).int()
+
+
+        # ins_indices0 = x.indices
+        # outids0, indice_pairs0, indice_pair_num0 = spconv.ops.get_indice_pairs(x.indices, x.batch_size, x.spatial_shape, ksize=3, stride=1, padding=0, dilation=1,subm=True)
+        
+
+        # (indice_pairs[0,0]!=-1).int().sum()
+        # indice_pairs[0,0,10006:]
+        # -1 in indice_pairs[0,0,:10006]
+
+        # outids = outids0
+        # indice_pairs = indice_pairs0
+        # indice_pair_num = indice_pair_num0
+        # indice_pairs[indice_pairs==-1] = 0
+        # indice_pair_num = indice_pair_num-100
+
+        # if resort_input:
+        #     features = torch.cat(features_list, dim=0)
+        #     return features, ins_indices, indice_tuple
+        # else:
+        indice_tuple = (outids, x.indices, indice_pairs, indice_pair_num, x.spatial_shape)
+        return indice_tuple
+
 
     def forward(self, features: spconv.SparseConvTensor, ins_indices_batch: List[torch.Tensor], ins_indices_len):
         """
@@ -384,14 +668,25 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         # output = x
         "TODO: change ins_indices_batch to start-end slice to save GPU Memory"
         ins_ids = torch.unique(ins_indices_batch)
+        x, ins_indices_batch = self.rearrange_inputs(x, ins_indices_batch, ins_ids)
         # ins_indices_batch = ins_indices_batch[...,None].expand_as(x.features)
         # pdb.set_trace()
 
-        # pdb.set_trace()
         # if self.amp_enable:
         #     x.features = x.features.half()
+        # pdb.set_trace()
+
+        if self.use_ins_conv:
+            x.indice_dict["subm0_insconv"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, 1)
+        if self.dilated_conv_type!="none":
+            # assert self.use_ins_conv
+            x.indice_dict["subm0_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max)
+            if "progressive" in self.dilated_conv_type:
+                x.indice_dict["subm1_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max*2)
+                x.indice_dict["subm2_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max*4)
 
         res = None
+        # pdb.set_trace()
         for idx, layer in enumerate(self.layers):
             # if self.use_res_later:
             #     if idx==3:
@@ -435,8 +730,13 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                 # x = layer(x, ins_indices_batch, ins_ids, ins_indices_len)
                 x = layer(x, ins_indices_batch, ins_ids)
             else:
+                # print(idx, x.indice_dict.keys(), x.indices.shape)
+                try:
+                    x = layer(x)
+                except:
+                    pdb.set_trace()
+                # print(idx, x.indice_dict.keys())
                 # pdb.set_trace()
-                x = layer(x)
 
             if self.use_res_input:
                 if self.use_ins_eca!="none":

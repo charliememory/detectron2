@@ -1,8 +1,11 @@
-source ~/.bashrc_liqianma
+
+source /HPS/HumanBodyRetargeting7/work/For_Liqian/.bashrc_liqianma
+export CUDA_VISIBLE_DEVICES=1
+
 # img_path=/esat/dragon/liqianma/datasets/Pose/KUL/liqian_outdoor_horizontal_01/images/frame_000001.jpg
 
 # data_root=/esat/dragon/liqianma/datasets/nerf/nerf_llff_data/fern
-data_root=/esat/dragon/liqianma/datasets/Pose/youtube/youtube_multi
+data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/youtube_multi
 # data_root=/esat/dragon/liqianma/datasets/Pose/youtube/youtube_single
 # data_root=/esat/dragon/liqianma/datasets/Pose/youtube/liqian01
 img_dir=$data_root/images
@@ -111,20 +114,20 @@ img_dir=$data_root/images
 # 						--output $vis_dir/frame_.jpg  --smooth_k 0
 
 
-# 49999
-cfg_name='densepose_CondInst_R_50_s1x'
-model_name=${cfg_name}_1chSeg_IUVSparsePooler2Head_AggFea_V1ConvXGNSparseInsINLowMemNoOverlapTrue_GTinsDilated3_amp_BS8
+## Show mode
+cfg_name='densepose_CondInst_R_50_s3x'
+model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x
 vis_dir=$data_root/${model_name}
 mkdir $vis_dir
-python apply_net.py dump configs/${cfg_name}.yaml \
-						output/${model_name}/model_0109999.pth \
-						$img_dir \
-						--output $vis_dir/frame_.jpg  --smooth_k 0 \
+python apply_net.py show configs/${cfg_name}.yaml \
+						output/${model_name}/model_final.pth \
+						$img_dir dp_contour \
+						--output $vis_dir/frame_.jpg   \
 						--opts \
 					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
 					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
 					    SOLVER.CHECKPOINT_PERIOD 5000 \
-					    DATALOADER.NUM_WORKERS 4 \
+					    DATALOADER.NUM_WORKERS 0 \
 					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
 					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
 					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
@@ -137,10 +140,10 @@ python apply_net.py dump configs/${cfg_name}.yaml \
 					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
 					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
 					    MODEL.CONDINST.v2 True \
-					    MODEL.FCOS.INFERENCE_TH_TEST 0.3 \
+					    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
 					    SOLVER.AMP.ENABLED True \
 					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-
+					    MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
 
 # data_root=/esat/dragon/liqianma/datasets/Pose/youtube/youtube_single
 # img_dir=$data_root/images

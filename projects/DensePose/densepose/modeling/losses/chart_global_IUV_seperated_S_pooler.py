@@ -1,7 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
 from typing import Any, List
-import torch, pdb
+import torch, pdb, copy
 from torch.nn import functional as F
 
 from detectron2.config import CfgNode
@@ -31,7 +31,7 @@ from .utils import dice_coefficient, FocalLoss
 class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
     def __call__(
         self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any,
-        gt_bitmasks: Any
+        gt_bitmasks: Any, images=None, skeleton_feats_gt=None
     ) -> LossDict:
         """
         Produce chart-based DensePose losses
@@ -55,9 +55,43 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
                 * loss_densepose_U: loss for U coordinates (smooth L1)
                 * loss_densepose_V: loss for V coordinates (smooth L1)
         """
+        if self.use_teacher_student:
+            with torch.no_grad():
+                teacher_features = self.teacher_model.backbone(images.tensor)
+                teacher_instances = copy.copy(proposals_with_gt)
+                for i in range(len(teacher_instances)):
+                    teacher_instances[i].set('pred_boxes', teacher_instances[i].get('gt_boxes').clone())
+                    teacher_instances[i].set('pred_classes', teacher_instances[i].get('gt_classes').clone())
+                self.teacher_instances = self.teacher_model.roi_heads.forward_with_given_boxes(teacher_features, teacher_instances)
+
+            for i in range(len(proposals_with_gt)):
+                for j in range(len(proposals_with_gt[i].gt_densepose)):
+                    if proposals_with_gt[i].gt_densepose[j] is not None:
+                        x = proposals_with_gt[i].gt_densepose[j].x
+                        y = proposals_with_gt[i].gt_densepose[j].y
+                        x = torch.clamp(x/256.*self.heatmap_size, 0, self.heatmap_size-2)
+                        y = torch.clamp(y/256.*self.heatmap_size, 0, self.heatmap_size-2)
+                        self.teacher_instances[i].gt_densepose[j].segm = F.interpolate(self.teacher_instances[i].gt_densepose[j].segm[None,None,...], 
+                                                        [self.heatmap_size,self.heatmap_size], mode="nearest")[0,0]
+
+                        # import imageio
+                        # imageio.imwrite("output/tmp/segm.png", self.teacher_instances[i].gt_densepose[j].segm.detach().cpu().numpy())
+                        # imageio.imwrite("output/tmp/segm_pred.png", self.teacher_instances[i].pred_densepose[j].coarse_segm[0,1].detach().cpu().numpy())
+                        self.teacher_instances[i].gt_densepose[j].segm[y.long(),x.long()] = 0
+                        self.teacher_instances[i].gt_densepose[j].segm[y.long(),x.long()+1] = 0
+                        # pdb.set_trace()
+                        self.teacher_instances[i].gt_densepose[j].segm[y.long()+1,x.long()] = 0
+                        self.teacher_instances[i].gt_densepose[j].segm[y.long()+1,x.long()+1] = 0
+                        # imageio.imwrite("output/tmp/segm2.png", self.teacher_instances[i].gt_densepose[j].segm.detach().cpu().numpy())
+                        # pdb.set_trace()
+
+                "TODO"
+                if self.teach_ins_wo_gt_dp:
+                    pass
+
         # if not self.segm_trained_by_masks:
         return self.produce_densepose_losses(proposals_with_gt, densepose_predictor_outputs, 
-        	gt_bitmasks)
+        	gt_bitmasks, skeleton_feats_gt)
         # else:
         #     losses_densepose = self.produce_densepose_losses(
         #         proposals_with_gt, densepose_predictor_outputs, gt_bitmasks
@@ -67,7 +101,7 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
 
     def produce_densepose_losses(
         self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any,
-        gt_bitmasks: Any
+        gt_bitmasks: Any, skeleton_feats_gt: Any
     ) -> LossDict:
         """
         Losses for segmentation and U/V coordinates computed as cross-entropy
@@ -128,7 +162,38 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
             gt_bitmasks
         )
 
-        return {**losses_uv, **losses_segm}
+        if self.use_aux_global_skeleton:
+            losses_skeleton = self.produce_densepose_losses_skeleton(
+                proposals_with_gt, densepose_predictor_outputs, skeleton_feats_gt
+            )
+        else:
+            losses_skeleton = {}
+
+        return {**losses_uv, **losses_segm, **losses_skeleton}
+
+    def produce_densepose_losses_skeleton(
+        self,
+        proposals_with_gt: List[Instances],
+        densepose_predictor_outputs: Any,
+        skeleton_feats_gt: Any,
+    ) -> LossDict:
+        global_s_gt = [torch.clamp(gt.gt_bitmasks.float().sum(dim=0), 0, 1) for gt in proposals_with_gt]
+        global_s_gt = torch.stack(global_s_gt, dim=0)[:,None,...]
+
+        # import imageio
+        # imageio.imwrite("output/tmp/skeleton_feats_gt.png", skeleton_feats_gt[0].sum(0).detach().cpu().numpy())
+        # pdb.set_trace()
+
+        # skeleton_feats_gt = skeleton_feats_gt * global_s_gt
+        skeleton_feats_est = densepose_predictor_outputs.aux_supervision[:,-55:]
+        loss_skeleton = F.mse_loss(skeleton_feats_est, skeleton_feats_gt, reduction="none").mean(dim=1,keepdim=True)
+        loss_skeleton = (loss_skeleton * global_s_gt).mean() * self.w_aux_global_skeleton
+
+        losses = {}
+        losses["loss_densepose_aux_skeleton"] = loss_skeleton
+
+        return losses
+
 
     def produce_densepose_losses_segm(
         self,
@@ -162,6 +227,34 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
                  instance segmentation data is performed (`segm_trained_by_masks` is True),
                  this loss is handled by `produce_mask_losses` instead
         """
+        losses = {}
+
+        if self.use_teacher_student:
+            loss_fine_segm_teach = 0.
+            m_sum = 0.
+            cnt = 0
+            for i in range(len(proposals_with_gt)):
+                for j in range(len(proposals_with_gt[i].gt_densepose)):
+                    if proposals_with_gt[i].gt_densepose[j] is not None:
+                        m = (self.teacher_instances[i].gt_densepose[j].segm>0).float()[None,...]
+                        # pdb.set_trace()
+                        fine_segm_gt = torch.argmax(self.teacher_instances[i].pred_densepose[j].fine_segm, dim=1)
+                        fine_segm_est = densepose_predictor_outputs.fine_segm[cnt:cnt+1]
+                        m_sum += m.sum()
+                        # if self.use_mean_uv:
+                        #     loss_u_teach += (F.smooth_l1_loss(u_est, u_gt, reduction="none") * m).sum()/m.sum() * self.w_points_teach
+                        #     loss_v_teach += (F.smooth_l1_loss(v_est, v_gt, reduction="none") * m).sum()/m.sum() * self.w_points_teach
+                        # else:
+
+                        if self.use_part_focal_loss:
+                            l = self.focal_loss(fine_segm_est, fine_segm_gt.long())
+                        else:
+                            l = F.cross_entropy(fine_segm_est, fine_segm_gt.long(), reduction="none")
+                        # pdb.set_trace()
+                        loss_fine_segm_teach += (l * m).sum()
+                    cnt += 1
+            losses["loss_densepose_I_teach"] = loss_fine_segm_teach/m_sum * self.w_part_teach
+
         fine_segm_gt = tensors_helper.fine_segm_labels_gt[interpolator.j_valid]
         fine_segm_est = interpolator.extract_at_points(
             densepose_predictor_outputs.fine_segm[tensors_helper.index_with_dp],
@@ -173,13 +266,9 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
         )[interpolator.j_valid, :]
         if self.use_part_focal_loss:
             # pdb.set_trace()
-            losses = {
-                "loss_densepose_I": self.focal_loss(fine_segm_est, fine_segm_gt.long()) * self.w_part
-            }
+            losses["loss_densepose_I"] = self.focal_loss(fine_segm_est, fine_segm_gt.long()).mean() * self.w_part
         else:
-            losses = {
-                "loss_densepose_I": F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
-            }
+            losses["loss_densepose_I"] = F.cross_entropy(fine_segm_est, fine_segm_gt.long()) * self.w_part
         fine_segm_est = torch.argmax(fine_segm_est,dim=1)
         # print(fine_segm_est.min(), fine_segm_est.max())
         # print(fine_segm_gt.min(), fine_segm_gt.max())
@@ -187,28 +276,153 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
         # import imageio
         # imageio.imwrite("tmp/fine_segm_gt")
 
-        if not self.segm_trained_by_masks:
-            # Resample everything to the estimated data size, no need to resample
-            # S_est then:
-            coarse_segm_est = densepose_predictor_outputs.coarse_segm[tensors_helper.index_with_dp]
-            with torch.no_grad():
-                coarse_segm_gt = resample_data(
-                    tensors_helper.coarse_segm_gt.unsqueeze(1),
-                    tensors_helper.bbox_xywh_gt,
-                    tensors_helper.bbox_xywh_est,
-                    self.heatmap_size,
-                    self.heatmap_size,
-                    mode="nearest",
-                    padding_mode="zeros",
-                ).squeeze(1)
-            if self.n_segm_chan == 2:
-                coarse_segm_gt = coarse_segm_gt > 0
-            losses["loss_densepose_S"] = (
-                F.cross_entropy(coarse_segm_est, coarse_segm_gt.long()) * self.w_segm
-            )
-        else:
-            assert self.n_segm_chan==1
-            loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm, gt_bitmasks)
-            losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
+        # if self.w_segm==0:
+        #     losses["loss_densepose_S"] = 0.
+        # else:
+        "TODO: add global S, skeleton_feat loss"
+        # if not self.segm_trained_by_masks:
+        #     # Resample everything to the estimated data size, no need to resample
+        #     # S_est then:
+        #     coarse_segm_est = densepose_predictor_outputs.coarse_segm[tensors_helper.index_with_dp]
+        #     with torch.no_grad():
+        #         coarse_segm_gt = resample_data(
+        #             tensors_helper.coarse_segm_gt.unsqueeze(1),
+        #             tensors_helper.bbox_xywh_gt,
+        #             tensors_helper.bbox_xywh_est,
+        #             self.heatmap_size,
+        #             self.heatmap_size,
+        #             mode="nearest",
+        #             padding_mode="zeros",
+        #         ).squeeze(1)
+        #     if self.n_segm_chan == 2:
+        #         coarse_segm_gt = coarse_segm_gt > 0
+        #     losses["loss_densepose_S"] = (
+        #         F.cross_entropy(coarse_segm_est, coarse_segm_gt.long()) * self.w_segm
+        #     )
+        # else:
+        assert self.n_segm_chan==1
+        # pdb.set_trace()
+        valid_idxs = gt_bitmasks.abs().mean([1,2,3])>0
+        loss_mask = dice_coefficient(densepose_predictor_outputs.coarse_segm[valid_idxs], gt_bitmasks[valid_idxs])
+        losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
+
+        if self.use_aux_global_s:
+            # global_s = densepose_predictor_outputs.aux_supervision[:,0:1]
+            # pdb.set_trace()
+            # loss_global_s = dice_coefficient(global_s, F.interpolate(gt_bitmasks, global_s.shape[-2:], mode="nearest"))
+            # losses["loss_densepose_aux_global_S"] = loss_global_s.mean() * self.w_aux_global_s
+
+            # loss_global_s = []
+            # cnt = 0
+            # for i in range(len(proposals_with_gt)):
+            #     global_s_gt = proposals_with_gt[0].gt_bitmasks
+            #     global_s_est = densepose_predictor_outputs.aux_supervision[:,0:1]
+            #     cnt += global_s_gt.shape[0]
+
+            global_s_gt = [torch.clamp(gt.gt_bitmasks.float().sum(dim=0), 0, 1) for gt in proposals_with_gt]
+            global_s_gt = torch.stack(global_s_gt, dim=0)[:,None,...]
+            global_s_est = densepose_predictor_outputs.aux_supervision[:,0:1]
+
+            losses["loss_densepose_aux_global_S"] = dice_coefficient(global_s_est, global_s_gt).mean() * self.w_aux_global_s
+            # gt_inds = pred_instances.gt_inds
+            # gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
+            # gt_bitmasks = gt_bitmasks[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+            # import imageio
+            # imageio.imwrite("output/tmp/global_s_gt.png", global_s_gt[0,0].detach().cpu().numpy())
+            # imageio.imwrite("output/tmp/global_s_est.png", global_s_est[0,0].detach().cpu().numpy())
+            # pdb.set_trace()
+
+        if self.use_aux_global_skeleton:
+            pass
+            self.w_aux_global_skeleton
 
         return losses
+
+
+    def produce_densepose_losses_uv(
+        self,
+        proposals_with_gt: List[Instances],
+        densepose_predictor_outputs: Any,
+        tensors_helper: SingleTensorsHelper,
+        interpolator: BilinearInterpolationHelper,
+        j_valid_fg: torch.Tensor,
+    ) -> LossDict:
+        """
+        Compute losses for U/V coordinates: smooth L1 loss between
+        estimated coordinates and the ground truth.
+
+        Args:
+            proposals_with_gt (list of Instances): detections with associated ground truth data
+            densepose_predictor_outputs: DensePose predictor outputs, an object
+                of a dataclass that is assumed to have the following attributes:
+             * u - U coordinate estimates per fine labels, tensor of shape [N, C, S, S]
+             * v - V coordinate estimates per fine labels, tensor of shape [N, C, S, S]
+        Return:
+            dict: str -> tensor: dict of losses with the following entries:
+             * `loss_densepose_U`: smooth L1 loss for U coordinate estimates
+             * `loss_densepose_V`: smooth L1 loss for V coordinate estimates
+        """
+        # pdb.set_trace()
+        # if not j_valid_fg.any():
+            # pdb.set_trace()
+
+        u_gt = tensors_helper.u_gt[j_valid_fg]
+        u_est = interpolator.extract_at_points(
+            densepose_predictor_outputs.u[tensors_helper.index_with_dp]
+        )[j_valid_fg]
+
+        v_gt = tensors_helper.v_gt[j_valid_fg]
+        v_est = interpolator.extract_at_points(
+            densepose_predictor_outputs.v[tensors_helper.index_with_dp]
+        )[j_valid_fg]
+
+        if self.use_teacher_student:
+            loss_u_teach = 0.
+            loss_v_teach = 0.
+            m_sum = 0.
+            cnt = 0
+            for i in range(len(proposals_with_gt)):
+                for j in range(len(proposals_with_gt[i].gt_densepose)):
+                    if proposals_with_gt[i].gt_densepose[j] is not None:
+                        m = (self.teacher_instances[i].gt_densepose[j].segm>0).float()[None,None,...]
+                        u_gt = self.teacher_instances[i].pred_densepose[j].u
+                        u_est = densepose_predictor_outputs.u[cnt:cnt+1]
+                        v_gt = self.teacher_instances[i].pred_densepose[j].v
+                        v_est = densepose_predictor_outputs.v[cnt:cnt+1]
+                        m_sum += m.sum()
+                        # if self.use_mean_uv:
+                        #     loss_u_teach += (F.smooth_l1_loss(u_est, u_gt, reduction="none") * m).sum()/m.sum() * self.w_points_teach
+                        #     loss_v_teach += (F.smooth_l1_loss(v_est, v_gt, reduction="none") * m).sum()/m.sum() * self.w_points_teach
+                        # else:
+                        # pdb.set_trace()
+                        l_u = F.smooth_l1_loss(u_est, u_gt, reduction="none").mean(dim=1,keepdim=True)
+                        loss_u_teach += (l_u * m).sum() * self.w_points_teach
+                        l_v = F.smooth_l1_loss(v_est, v_gt, reduction="none").mean(dim=1,keepdim=True)
+                        loss_v_teach += (l_v * m).sum() * self.w_points_teach
+                    cnt += 1
+            if self.use_mean_uv:
+                return {
+                    "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="mean") * self.w_points,
+                    "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="mean") * self.w_points,
+                    "loss_densepose_U_teach": loss_u_teach/m_sum,
+                    "loss_densepose_V_teach": loss_v_teach/m_sum,
+                }
+            else:
+                return {
+                    "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
+                    "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
+                    "loss_densepose_U_teach": loss_u_teach,
+                    "loss_densepose_V_teach": loss_v_teach,
+                }
+        else:
+            if self.use_mean_uv:
+                return {
+                    "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="mean") * self.w_points,
+                    "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="mean") * self.w_points,
+                }
+            else:
+                return {
+                    "loss_densepose_U": F.smooth_l1_loss(u_est, u_gt, reduction="sum") * self.w_points,
+                    "loss_densepose_V": F.smooth_l1_loss(v_est, v_gt, reduction="sum") * self.w_points,
+                }
+

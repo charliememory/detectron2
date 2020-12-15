@@ -65,6 +65,14 @@ class DecoderSparse(nn.Module):
         self.use_ins_gn = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         agg_channels = cfg.MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS
+        self.use_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S
+        self.use_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON
+        if self.use_aux_global_s:
+            num_classes += 1
+        if self.use_aux_global_skeleton:
+            "to check"
+            num_classes += 55
+        self.predictor_conv_type = cfg.MODEL.CONDINST.IUVHead.PREDICTOR_TYPE
         # fmt: on
 
         if not self.use_agg_feat:
@@ -121,16 +129,62 @@ class DecoderSparse(nn.Module):
 
         self.densepose_head = build_densepose_head(cfg, conv_dims)
 
-        self.predictor = Conv2d(
-            cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
-        )
+        if self.predictor_conv_type=="conv":
+            self.predictor = Conv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
+            )
+            initialize_module_params(self.predictor)
+        elif self.predictor_conv_type=="dcnv1":
+            self.predictor = deform_conv.DFConv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes,
+                with_modulated_dcn=False, kernel_size=3
+            )
+        elif self.predictor_conv_type=="dcnv2":
+            self.predictor = deform_conv.DFConv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes,
+                with_modulated_dcn=True, kernel_size=3
+            )
+        elif self.predictor_conv_type=="dcnv2Conv":
+            self.predictor = []
+            self.predictor.append(deform_conv.DFConv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM,
+                with_modulated_dcn=True, kernel_size=3
+            ))
+            self.predictor.append(Conv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
+            ))
+            initialize_module_params(self.predictor[-1])
+            self.predictor = nn.Sequential(*self.predictor)
+        elif self.predictor_conv_type=="dcnv2ResConv":
+            self.predictor = []
+            self.predictor.append(deform_conv.DeformBottleneckBlock(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM,
+                bottleneck_channels=cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM,
+                deform_modulated=True
+            ))
+            self.predictor.append(Conv2d(
+                cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM, num_classes, 1, stride=1, padding=0
+            ))
+            initialize_module_params(self.predictor[-1])
+            self.predictor = nn.Sequential(*self.predictor)
+        elif self.predictor_conv_type=="sparse":
+            # self.predictor = nn.Identity()
+            conv = sparse_conv_with_kaiming_uniform(norm=None, activation=None, use_sep=False, 
+                                use_submconv=True, use_deconv=False)
+            self.predictor = conv(
+                        cfg.MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM,
+                        num_classes,
+                        kernel_size=3,
+                        stride=1,
+                        dilation=1,
+                        indice_key="subm0",
+                    )
 
         # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
         # self.amp_enable = False
         # if self.amp_enable:
         #     self = self.half()
 
-        initialize_module_params(self.predictor)
         # weight_init.c2_msra_fill(self.predictor)
 
         ## debug
@@ -233,18 +287,21 @@ class DecoderSparse(nn.Module):
 
         # x = x * fg_mask
         # x = self.densepose_head(x, ins_mask_list)
-        x = x.dense()
-
-        # if self.checkpoint_grad_num>0 and len(self.bbox_tower)>0:
-        #     modules = [module for k, module in self.bbox_tower._modules.items()]
-        #     bbox_tower = checkpoint.checkpoint_sequential(modules,1,feature)
-        # else:
-        #     bbox_tower = self.bbox_tower(feature)
-
-        if self.checkpoint_grad_num>0:
-            x = checkpoint.checkpoint(self.custom(self.predictor), x)
+        if self.predictor_conv_type=="sparse":
+            x = self.predictor(x).dense()
         else:
-            x = self.predictor(x)
+            x = x.dense()
+
+            # if self.checkpoint_grad_num>0 and len(self.bbox_tower)>0:
+            #     modules = [module for k, module in self.bbox_tower._modules.items()]
+            #     bbox_tower = checkpoint.checkpoint_sequential(modules,1,feature)
+            # else:
+            #     bbox_tower = self.bbox_tower(feature)
+
+            if self.checkpoint_grad_num>0:
+                x = checkpoint.checkpoint(self.custom(self.predictor), x)
+            else:
+                x = self.predictor(x)
 
         return x
 

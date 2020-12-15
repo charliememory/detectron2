@@ -159,7 +159,7 @@ def sparse_conv_with_kaiming_uniform(
         norm=None, activation=None, use_sep=False, use_submconv=True, use_deconv=False, use_weight_std=False):
     def make_conv(
         in_channels, out_channels, kernel_size, 
-        stride=1, dilation=1, indice_key="subm0"
+        stride=1, padding=0, dilation=1, indice_key="subm0"
     ):
         if use_weight_std:
             assert use_submconv and not use_deconv, "WS are not added to others spconv layers yet"
@@ -191,7 +191,7 @@ def sparse_conv_with_kaiming_uniform(
                 out_channels,
                 kernel_size=kernel_size,
                 stride=stride,
-                padding=0,
+                padding=padding,
                 dilation=dilation,
                 groups=groups,
                 bias=(norm is None), 

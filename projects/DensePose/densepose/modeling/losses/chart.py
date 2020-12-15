@@ -8,6 +8,7 @@ from torch.nn import functional as F
 from detectron2.config import CfgNode
 from detectron2.structures import Instances
 
+
 from .registry import DENSEPOSE_LOSS_REGISTRY
 from .utils import BilinearInterpolationHelper, LossDict, SingleTensorsHelper, resample_data
 from .utils import dice_coefficient, FocalLoss
@@ -117,13 +118,38 @@ class DensePoseChartLoss:
         self.n_segm_chan  = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
         # fmt: on
         self.segm_trained_by_masks = cfg.MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS
+        self.use_mean_uv = cfg.MODEL.ROI_DENSEPOSE_HEAD.MEAN_UV_LOSS
 
         if self.use_part_focal_loss:
             gamma = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_GAMMA
-            self.focal_loss = FocalLoss(gamma=gamma, alpha=None, size_average=True)
+            self.focal_loss = FocalLoss(gamma=gamma, alpha=None, size_average=False)
+
+        self.use_teacher_student = cfg.MODEL.TEACHER_STUDENT
+        self.teacher_cfg = cfg.MODEL.TEACHER_CFG_FILE
+        self.teacher_weights = cfg.MODEL.TEACHER_WEIGHTS
+        self.teach_ins_wo_gt_dp = cfg.MODEL.TEACH_INS_WO_GT_DP
+        self.w_part_teach     = cfg.MODEL.TEACH_PART_WEIGHTS
+        self.w_points_teach     = cfg.MODEL.TEACH_POINT_REGRESSION_WEIGHTS
+        if self.use_teacher_student:
+            from densepose.engine import Trainer
+            from densepose.modeling.densepose_checkpoint import DensePoseCheckpointer
+            from densepose.config import get_cfg, add_densepose_config
+            self.teacher_cfg = get_cfg()
+            add_densepose_config(self.teacher_cfg)
+            self.teacher_cfg.merge_from_file(cfg.MODEL.TEACHER_CFG_FILE)
+            self.teacher_model = Trainer.build_model(self.teacher_cfg)
+            # pdb.set_trace()
+            DensePoseCheckpointer(self.teacher_model).load(cfg.MODEL.TEACHER_WEIGHTS)
+            self.teacher_model.eval()
+
+        self.use_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S
+        self.use_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON
+        self.w_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S_WEIGHTS
+        self.w_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON_WEIGHTS
+        
 
     def __call__(
-        self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any
+        self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any, images=None
     ) -> LossDict:
         """
         Produce chart-based DensePose losses
@@ -147,6 +173,11 @@ class DensePoseChartLoss:
                 * loss_densepose_U: loss for U coordinates (smooth L1)
                 * loss_densepose_V: loss for V coordinates (smooth L1)
         """
+        # if self.use_teacher_student:
+        #     with torch.no_grad():
+        #         pdb.set_trace()
+        #         outputs = self.teacher_model(inputs)
+
         if not self.segm_trained_by_masks:
             return self.produce_densepose_losses(proposals_with_gt, densepose_predictor_outputs)
         else:
