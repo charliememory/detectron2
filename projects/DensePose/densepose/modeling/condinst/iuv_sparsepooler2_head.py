@@ -17,7 +17,8 @@ from detectron2.modeling.poolers import ROIPooler
 from detectron2.modeling.roi_heads import select_foreground_proposals
 from detectron2.structures import ImageList, Instances, Boxes
 
-from densepose.layers import conv_with_kaiming_uniform, deform_conv, sparse_conv_with_kaiming_uniform
+from densepose.layers import conv_with_kaiming_uniform, deform_conv
+from densepose.layers import sparse_conv_with_kaiming_uniform, SAN_BottleneckGN, SAN_BottleneckGN_GatedEarly, SAN_BottleneckGN_Gated
 from densepose.utils.comm import compute_locations, compute_grid, aligned_bilinear
 import spconv
 from ..roi_heads import DensePoseDeepLabHead
@@ -73,42 +74,45 @@ class DecoderSparse(nn.Module):
             "to check"
             num_classes += 55
         self.predictor_conv_type = cfg.MODEL.CONDINST.IUVHead.PREDICTOR_TYPE
+        self.use_dropout = cfg.MODEL.CONDINST.IUVHead.DROPOUT
+        self.use_san = cfg.MODEL.CONDINST.IUVHead.USE_SAN
+        self.san_type = cfg.MODEL.CONDINST.SAN_TYPE
         # fmt: on
 
-        if not self.use_agg_feat:
-            self.scale_heads = []
-            for in_feature in self.in_features:
-                head_ops = []
-                head_length = max(
-                    1, int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride))
-                )
-                for k in range(head_length):
-                    conv = Conv2d(
-                        feature_channels[in_feature] if k == 0 else conv_dims,
-                        conv_dims,
-                        kernel_size=3,
-                        stride=1,
-                        padding=1,
-                        bias=not norm,
-                        norm=get_norm(norm, conv_dims),
-                        activation=F.relu,
-                    )
-                    weight_init.c2_msra_fill(conv)
-                    head_ops.append(conv)
-                    if feature_strides[in_feature] != self.common_stride:
-                        head_ops.append(
-                            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
-                        )
-                self.scale_heads.append(nn.Sequential(*head_ops))
-                self.add_module(in_feature, self.scale_heads[-1])
+        # if not self.use_agg_feat:
+        #     self.scale_heads = []
+        #     for in_feature in self.in_features:
+        #         head_ops = []
+        #         head_length = max(
+        #             1, int(np.log2(feature_strides[in_feature]) - np.log2(self.common_stride))
+        #         )
+        #         for k in range(head_length):
+        #             conv = Conv2d(
+        #                 feature_channels[in_feature] if k == 0 else conv_dims,
+        #                 conv_dims,
+        #                 kernel_size=3,
+        #                 stride=1,
+        #                 padding=1,
+        #                 bias=not norm,
+        #                 norm=get_norm(norm, conv_dims),
+        #                 activation=F.relu,
+        #             )
+        #             weight_init.c2_msra_fill(conv)
+        #             head_ops.append(conv)
+        #             if feature_strides[in_feature] != self.common_stride:
+        #                 head_ops.append(
+        #                     nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
+        #                 )
+        #         self.scale_heads.append(nn.Sequential(*head_ops))
+        #         self.add_module(in_feature, self.scale_heads[-1])
 
         # self.predictor = Conv2d(conv_dims, num_classes, kernel_size=1, stride=1, padding=0)
         
 
         if num_lambda_layer>0:
             self.comb_pe_conv = LambdaLayer(
-                dim = conv_dims+pe_dim,
-                dim_out = conv_dims,
+                dim = agg_channels+pe_dim,
+                dim_out = agg_channels,
                 r = lambda_layer_r,         # the receptive field for relative positional encoding (23 x 23)
                 dim_k = 16,
                 heads = 4,
@@ -117,17 +121,31 @@ class DecoderSparse(nn.Module):
         else:
             self.comb_pe_conv = Conv2d(
                 agg_channels+pe_dim,
-                conv_dims,
+                agg_channels,
                 kernel_size=3,
                 stride=1,
                 padding=1,
                 bias=not norm,
-                norm=get_norm(norm, conv_dims),
+                norm=get_norm(norm, agg_channels),
                 activation=F.relu,
             )
-        # weight_init.c2_msra_fill(self.comb_pe_conv)
 
-        self.densepose_head = build_densepose_head(cfg, conv_dims)
+        if self.use_san:
+            # sa_type = 1 ## 0: pairwise; 1: patchwise
+            sa_type = 1
+            if self.san_type=="SAN_BottleneckGN":
+                san_func = SAN_BottleneckGN
+            elif self.san_type=="SAN_BottleneckGN_GatedEarly":
+                san_func = SAN_BottleneckGN_GatedEarly
+            elif self.san_type=="SAN_BottleneckGN_Gated":
+                san_func = SAN_BottleneckGN_Gated
+            self.san_blk_1 = san_func(sa_type, agg_channels, agg_channels // 16, agg_channels // 4, agg_channels, 8, kernel_size=7, stride=1)
+
+        # weight_init.c2_msra_fill(self.comb_pe_conv)
+        if self.use_dropout:
+            self.dropout_layer = nn.Dropout2d(0.25)
+
+        self.densepose_head = build_densepose_head(cfg, agg_channels)
 
         if self.predictor_conv_type=="conv":
             self.predictor = Conv2d(
@@ -228,6 +246,13 @@ class DecoderSparse(nn.Module):
             # else:
             x = self.comb_pe_conv(x)
 
+        if self.use_dropout:
+            x = self.dropout_layer(x)
+
+        if self.use_san:
+            # x = self.san_blk_1(x*fg_mask)
+            x = self.san_blk_1(x) 
+
         ## dense to sparse
         N, C, H, W = x.shape
         coord = compute_grid(H, W, device=x.device, norm=False)
@@ -246,12 +271,12 @@ class DecoderSparse(nn.Module):
                 # ins_indices = torch.argmax(bg_and_ins, dim=0)[m[0,0]>0] + ins_cnt
                 # try:
                 ins_indices = torch.argmax(ins_mask_list[n].float(), dim=0)[m[0,0]>0] + ins_cnt
+                # except:
+                #     pdb.set_trace()
                 ins_indices_batch.append(ins_indices)
                 ins_cnt += ins_mask_list[n].shape[0]
 
                 ins_indices_len.append(torch.sum(ins_mask_list[n],dim=[1,2]))
-                # except:
-                    # pdb.set_trace()
 
                 # import imageio
                 # masks = ins_mask_list[n]
@@ -290,6 +315,7 @@ class DecoderSparse(nn.Module):
         if self.predictor_conv_type=="sparse":
             x = self.predictor(x).dense()
         else:
+            # pdb.set_trace()
             x = x.dense()
 
             # if self.checkpoint_grad_num>0 and len(self.bbox_tower)>0:

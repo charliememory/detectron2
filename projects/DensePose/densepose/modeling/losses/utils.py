@@ -10,6 +10,39 @@ from detectron2.structures import Instances
 
 LossDict = Dict[str, torch.Tensor]
 
+## Ref: https://github.com/hellojialee/Improved-Body-Parts/blob/19011cfb1e53198c9a86cdbe45ec2453ce67223c/models/loss_model.py#L134
+# def focal_l2_loss(s, sxing, mask_miss, heat_start, bkg_start, gamma=1, multi_task_weight=0.1,
+#                   keypoint_task_weight=1, nstack_weight=[1, 1, 1, 1], alpha=0., beta=0.):
+def focal_l2_loss(s, sxing, gamma=1, multi_task_weight=0.1,
+                  keypoint_task_weight=1, nstack_weight=[1, 1, 1, 1], alpha=0., beta=0.):
+    """
+    Compute the focal L2 loss between predicted and groundtruth score maps.
+    :param s:  predicted tensor (nstack, batch, channel, height, width), predicted score maps
+    :param sxing: target tensor (nstack, batch, channel, height, width)
+    :param mask_miss: tensor (nstack, batch, 1, height, width)
+    :param gamma: focusing parameter
+    :return: a scalar tensor
+    """
+    # eps = 1e-8  # 1e-12
+    # s = torch.clamp(s, eps, 1. - eps)  # improve the stability of the focal loss
+    # mask = mask_miss.expand_as(sxing).clone()  # type: torch.Tensor
+    # del mask_miss
+    # mask[:, :, -2, :, :] *= multi_task_weight  # except for person mask channel
+    # mask[:, :, heat_start:bkg_start, :, :] *= keypoint_task_weight
+    # pdb.set_trace()
+    st = torch.where(torch.ge(sxing, 0.01), s - alpha, 1 - s - beta)  
+    factor = torch.abs(1. - st)  # (1. - st) ** gamma  for gamma=2
+    # multiplied by mask_miss via broadcast operation
+    out = (s - sxing) ** 2 * factor # * mask  # type: torch.Tensor
+    # sum over the feature map, should divide by batch afterwards
+    # loss_nstack = out.sum(dim=(1, 2, 3, 4))   # out.[:, :, heat_start:bkg_start, :, :] 
+    loss_nstack = out.mean(dim=(1, 2, 3, 4))   # out.[:, :, heat_start:bkg_start, :, :] 
+    assert len(loss_nstack) == len(nstack_weight), nstack_weight
+    # print(' heatmap focal L2 loss per stack..........  ', loss_nstack.detach().cpu().numpy())
+    weight_loss = [loss_nstack[i] * nstack_weight[i] for i in range(len(nstack_weight))]
+    loss = sum(weight_loss) / sum(nstack_weight)  
+    # pdb.set_trace()
+    return loss
 
 def dice_coefficient(x, target):
     eps = 1e-5
@@ -785,6 +818,48 @@ def _resample_data_v2(
     zresampled = F.grid_sample(z, grid, mode=mode, padding_mode=padding_mode, align_corners=True)
     return zresampled
 
+def _interpolate_gt_iuv(dp_gt):
+
+        # self.x = torch.as_tensor(annotation[DensePoseDataRelative.X_KEY])
+        # self.y = torch.as_tensor(annotation[DensePoseDataRelative.Y_KEY])
+        # self.i = torch.as_tensor(annotation[DensePoseDataRelative.I_KEY])
+        # self.u = torch.as_tensor(annotation[DensePoseDataRelative.U_KEY])
+        # self.v = torch.as_tensor(annotation[DensePoseDataRelative.V_KEY])
+        # self.segm = DensePoseDataRelative.extract_segmentation_mask(annotation)
+    gt_i_unique = torch.unique(dp_gt.i)
+    new_x_list, new_y_list, new_i_list, new_u_list, new_v_list = [], [], [], [], []
+    for ii in range(gt_i_unique.shape[0]):
+        idx = (dp_gt.i==gt_i_unique[ii]).nonzero()[:,0]
+        if idx.shape[0]<=1:
+            continue
+        # idx = idx[torch.randperm(idx.nelement())]
+        # pdb.set_trace()
+        #
+        new_x = dp_gt.x[idx].clone()
+        new_x = (new_x[:-1] + new_x[1:]) * 0.5
+        new_x_list.append(new_x)
+        #
+        new_y = dp_gt.y[idx].clone()
+        new_y = (new_y[:-1] + new_y[1:]) * 0.5
+        new_y_list.append(new_y)
+        #
+        new_i = dp_gt.i[idx].clone()
+        new_i_list.append(new_i[:-1])
+        #
+        new_u = dp_gt.u[idx].clone()
+        new_u = (new_u[:-1] + new_u[1:]) * 0.5
+        new_u_list.append(new_u)
+        #
+        new_v = dp_gt.v[idx].clone()
+        new_v = (new_v[:-1] + new_v[1:]) * 0.5
+        new_v_list.append(new_v)
+    dp_gt.x = torch.cat([dp_gt.x]+new_x_list)
+    dp_gt.y = torch.cat([dp_gt.y]+new_y_list)
+    dp_gt.i = torch.cat([dp_gt.i]+new_i_list)
+    dp_gt.u = torch.cat([dp_gt.u]+new_u_list)
+    dp_gt.v = torch.cat([dp_gt.v]+new_v_list)
+    return dp_gt
+
 
 def _extract_single_tensors_from_matches_one_image(
     proposals_targets, bbox_with_dp_offset, bbox_global_offset
@@ -821,6 +896,8 @@ def _extract_single_tensors_from_matches_one_image(
                 range(n_i), boxes_xywh_est.tensor, boxes_xywh_gt.tensor, densepose_gt
             ):
                 if (dp_gt is not None) and (len(dp_gt.x) > 0):
+                    ## Uncomment below to enable interpolation augmentation of IUV
+                    dp_gt = _interpolate_gt_iuv(dp_gt)
                     i_gt_all.append(dp_gt.i)
                     x_norm_all.append(dp_gt.x)
                     y_norm_all.append(dp_gt.y)

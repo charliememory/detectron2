@@ -13,7 +13,7 @@ from .chart import DensePoseChartLoss
 # from .chart_global_IUV_seperated_S import DensePoseChartGlobalIUVSeparatedSLoss
 from .registry import DENSEPOSE_LOSS_REGISTRY
 from .utils import BilinearInterpolationHelper, LossDict, SingleTensorsHelper
-from .utils import dice_coefficient, FocalLoss
+from .utils import dice_coefficient, FocalLoss, focal_l2_loss
 
 
 # def dice_coefficient(x, target):
@@ -171,6 +171,23 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
 
         return {**losses_uv, **losses_segm, **losses_skeleton}
 
+                        
+    def _torch_dilate(self, binary_img, kernel_size=3, mode='nearest'):
+        if kernel_size==0:
+            return binary_img
+        B,C,H,W = binary_img.shape
+        binary_img = binary_img.reshape([B*C,1,H,W])
+        if not hasattr(self, 'dilate_kernel'):
+            # self.dilate_kernel = torch.Tensor(torch.ones([kernel_size,kernel_size]), device=binary_img.device)[None,None,...]
+            self.dilate_kernel = torch.ones([1,1,kernel_size,kernel_size], device=binary_img.device)
+        # pdb.set_trace()
+        pad = torch.nn.ReflectionPad2d(int(kernel_size//2))
+
+        out = torch.clamp(torch.nn.functional.conv2d(pad(binary_img), self.dilate_kernel, padding=0), 0, 1)
+        out = F.interpolate(out, size=binary_img.shape[2:], mode=mode)
+        return out.reshape([B,C,H,W])
+
+    "TODO: 1) use dice_coefficient loss instead of simple mes loss"
     def produce_densepose_losses_skeleton(
         self,
         proposals_with_gt: List[Instances],
@@ -186,8 +203,22 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
 
         # skeleton_feats_gt = skeleton_feats_gt * global_s_gt
         skeleton_feats_est = densepose_predictor_outputs.aux_supervision[:,-55:]
-        loss_skeleton = F.mse_loss(skeleton_feats_est, skeleton_feats_gt, reduction="none").mean(dim=1,keepdim=True)
-        loss_skeleton = (loss_skeleton * global_s_gt).mean() * self.w_aux_global_skeleton
+
+        ## standard mse loss
+        # loss_skeleton = F.mse_loss(skeleton_feats_est, skeleton_feats_gt, reduction="none").mean(dim=1,keepdim=True)
+        # loss_skeleton = (loss_skeleton * global_s_gt).mean() * self.w_aux_global_skeleton
+        
+        ## dice_coefficient loss
+        ## dilate & binarize gt, and then apply dice_coefficient loss to balance FG and BG
+        # skeleton_feats_gt = self._torch_dilate(skeleton_feats_gt, kernel_size=3)
+        # skeleton_feats_gt = (skeleton_feats_gt>0).float()
+        # loss_skeleton = dice_coefficient(skeleton_feats_est*global_s_gt, skeleton_feats_gt*global_s_gt)
+        # loss_skeleton = loss_skeleton.mean()  * self.w_aux_global_skeleton
+
+        ## focal-like l2 loss
+        loss_skeleton = focal_l2_loss(skeleton_feats_est[None,...], skeleton_feats_gt[None,...], nstack_weight=[1])
+        loss_skeleton = loss_skeleton  * self.w_aux_global_skeleton
+
 
         losses = {}
         losses["loss_densepose_aux_skeleton"] = loss_skeleton
@@ -339,6 +370,7 @@ class DensePoseChartGlobalIUVSeparatedSPoolerLoss(DensePoseChartLoss):
         return losses
 
 
+    "TODO: 2) linear interpolate UV labels"
     def produce_densepose_losses_uv(
         self,
         proposals_with_gt: List[Instances],

@@ -401,7 +401,7 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
 
     sampler = InferenceSampler(len(dataset))
     # sampler = InferenceSampler(min(1508,len(dataset)))
-    # sampler = InferenceSampler(10) 
+    # sampler = InferenceSampler(10)
     # import pdb
     # pdb.set_trace()
     # Always use 1 image per worker during inference since this is the

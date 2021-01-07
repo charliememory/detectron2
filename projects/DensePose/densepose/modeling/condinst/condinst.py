@@ -107,6 +107,9 @@ class CondInst(nn.Module):
         ##
         self.mask_out_stride = cfg.MODEL.CONDINST.MASK_OUT_STRIDE
         self.max_proposals = cfg.MODEL.CONDINST.MAX_PROPOSALS
+        self.rand_flip = cfg.MODEL.CONDINST.RAND_FLIP
+        self.rand_scale = cfg.MODEL.CONDINST.RAND_SCALE
+        self.rand_scale_gap = cfg.MODEL.CONDINST.RAND_SCALE_GAP
 
         # build top module
         in_channels = self.proposal_generator.in_channels_to_top_module
@@ -296,6 +299,52 @@ class CondInst(nn.Module):
     def forward(self, batched_inputs):
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [self.normalizer(x) for x in images]
+
+        self.img_ori_size_list = [x.shape[1:] for x in images] # HxW
+        self.is_flipped = False
+        # assert not self.rand_flip, 'current densepose annotation is not suitable for flip augmentation'
+        # if self.rand_flip and torch.rand(1)>0.5:
+        #     images = [torch.flip(im,dims=[2]) for im in images] # CxHxW
+        #     for batch_idx in range(len(batched_inputs)):
+        #         instances = batched_inputs[batch_idx]['instances']
+        #         # pdb.set_trace()  
+        #         _, h, w = images[batch_idx].shape
+        #         # for ins_idx in range(len(instances)):
+        #         instances.gt_boxes.tensor = w - instances.gt_boxes.tensor
+        #         # instances.gt_masks.tensor = 
+        #     self.is_flipped = True
+                
+        self.scale_factor = 1.
+        self.is_scaled = False
+        if self.rand_scale and torch.rand(1)>0.5:
+            # min_scale, max_scale = 0.8, 1.2
+            min_scale, max_scale = 1.-self.rand_scale_gap, 1.+self.rand_scale_gap
+            scale_factor = torch.rand(1)*(max_scale-min_scale) + min_scale
+            # print([im.shape for im in images])
+            "If contains too small instances, not downscale"
+            for batch_idx in range(len(batched_inputs)):
+                instances = batched_inputs[batch_idx]['instances']
+                if self.rand_scale_gap>0.2:
+                    thres = 1024
+                else:
+                    # thres = 64
+                    thres = 512
+                if instances.gt_masks.tensor.sum(dim=[1,2]).min()<=thres:
+                    scale_factor = 1. + abs(1.-scale_factor)
+                    # print(scale_factor)
+
+            images = [F.interpolate(im[None,...], scale_factor=scale_factor)[0] for im in images]
+            for batch_idx in range(len(batched_inputs)):
+                # instances = batched_inputs[batch_idx]['instances']
+                # for ins_idx in range(len(instances)):
+                batched_inputs[batch_idx]['instances'].gt_boxes.tensor *= scale_factor
+                # print(instances.gt_masks.tensor.sum(dim=[1,2]))
+
+                # instances.gt_masks.tensor = F.interpolate(instances.gt_masks.tensor.float()[:,None,...], 
+                #                                     scale_factor=scale_factor,mode='nearest')[:,0].bool()
+            self.scale_factor = scale_factor
+            self.is_scaled = True
+
         images = ImageList.from_tensors(images, self.backbone.size_divisibility)
 
         # import imageio
@@ -310,7 +359,7 @@ class CondInst(nn.Module):
         #         skeleton_feats = self.process_skeleton_feats(batched_inputs, images.tensor.size(-2), images.tensor.size(-1))
 
         skeleton_feats_gt = None
-        if self.use_aux_skeleton:
+        if self.use_aux_skeleton and self.training:
             skeleton_feats_gt = self.process_skeleton_feats(batched_inputs, images.tensor.size(-2), images.tensor.size(-1))
 
         if self.finetune_iuvhead_only:
@@ -637,6 +686,15 @@ class CondInst(nn.Module):
             #     })
 
             # return processed_results
+    def _aug_bitmasks(self, bitmasks, is_flipped, is_scaled, scale_factor=1.):
+        # bitmasks format: BxHxW
+        # import os, imageio
+        # imageio.imwrite('tmp/bitmask.png', bitmasks[0].cpu().numpy())
+        if is_flipped:
+            bitmasks = torch.flip(bitmasks, dims=[2])
+        if is_scaled:
+            bitmasks = F.interpolate(bitmasks.float()[:,None,...], scale_factor=scale_factor,mode='nearest')[:,0].bool()
+        return bitmasks
 
     def add_bitmasks(self, instances, im_h, im_w):
         for per_im_gt_inst in instances:
@@ -651,11 +709,11 @@ class CondInst(nn.Module):
                     if per_im_gt_inst.gt_densepose[j] is not None:
                         x1,y1,x2,y2 = boxes_xyxy[j].int()
                         fg_mask = (per_im_gt_inst.gt_densepose[j].segm[None,None,...]>0).float()
+                        fg_mask = self._aug_bitmasks(fg_mask, self.is_flipped, is_scaled=False)
                         bitmasks_full[j,y1:y2,x1:x2] = F.interpolate(fg_mask, (y2-y1,x2-x1), mode="nearest")[0,0]
                     # else:
                     #     print(j)
                     #     pdb.set_trace()
-
                 bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
                 # pdb.set_trace()
                 # import imageio
@@ -665,36 +723,44 @@ class CondInst(nn.Module):
                 per_im_gt_inst.set('gt_bitmasks_full', bitmasks_full)
 
                 # pdb.set_trace()
+            else:
 
-            if not per_im_gt_inst.has("gt_masks"):
-                continue
-            if isinstance(per_im_gt_inst.get("gt_masks"), PolygonMasks):
-                polygons = per_im_gt_inst.get("gt_masks").polygons
-                per_im_bitmasks = []
-                per_im_bitmasks_full = []
-                for per_polygons in polygons:
-                    bitmask = polygons_to_bitmask(per_polygons, im_h, im_w)
-                    bitmask = torch.from_numpy(bitmask).to(self.device).float()
-                    start = int(self.mask_out_stride // 2)
-                    bitmask_full = bitmask.clone()
-                    bitmask = bitmask[start::self.mask_out_stride, start::self.mask_out_stride]
+                if not per_im_gt_inst.has("gt_masks"):
+                    continue
+                if isinstance(per_im_gt_inst.get("gt_masks"), PolygonMasks):
+                    polygons = per_im_gt_inst.get("gt_masks").polygons
+                    per_im_bitmasks = []
+                    per_im_bitmasks_full = []
+                    for per_polygons, img_ori_size in zip(polygons, self.img_ori_size_list):
+                        h, w = img_ori_size
+                        bitmask = polygons_to_bitmask(per_polygons, h, w)
+                        bitmask = torch.from_numpy(bitmask).to(self.device).float()
+                        bitmask = self._aug_bitmasks(bitmask)
+                        bitmask = F.pad(bitmask, (0, im_w - w, 0, im_h - h), "constant", 0)
 
-                    assert bitmask.size(0) * self.mask_out_stride == im_h
-                    assert bitmask.size(1) * self.mask_out_stride == im_w
+                        bitmask_full = bitmask.clone()
+                        start = int(self.mask_out_stride // 2)
+                        bitmask = bitmask[start::self.mask_out_stride, start::self.mask_out_stride]
 
-                    per_im_bitmasks.append(bitmask)
-                    per_im_bitmasks_full.append(bitmask_full)
+                        assert bitmask.size(0) * self.mask_out_stride == im_h
+                        assert bitmask.size(1) * self.mask_out_stride == im_w
 
-                per_im_gt_inst.gt_bitmasks = torch.stack(per_im_bitmasks, dim=0)
-                per_im_gt_inst.gt_bitmasks_full = torch.stack(per_im_bitmasks_full, dim=0)
-            else: # RLE format bitmask
-                bitmasks = per_im_gt_inst.get("gt_masks").tensor
-                h, w = bitmasks.size()[1:]
-                # pad to new size
-                bitmasks_full = F.pad(bitmasks, (0, im_w - w, 0, im_h - h), "constant", 0)
-                bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
-                per_im_gt_inst.gt_bitmasks = bitmasks
-                per_im_gt_inst.gt_bitmasks_full = bitmasks_full
+                        per_im_bitmasks.append(bitmask)
+                        per_im_bitmasks_full.append(bitmask_full)
+
+                    per_im_gt_inst.gt_bitmasks = torch.stack(per_im_bitmasks, dim=0)
+                    per_im_gt_inst.gt_bitmasks_full = torch.stack(per_im_bitmasks_full, dim=0)
+                else: # RLE format bitmask
+                    bitmasks = per_im_gt_inst.get("gt_masks").tensor
+                    bitmasks = self._aug_bitmasks(bitmasks, self.is_flipped, self.is_scaled, self.scale_factor)
+                    h, w = bitmasks.size()[1:]
+                    # pad to new size
+                    bitmasks_full = F.pad(bitmasks, (0, im_w - w, 0, im_h - h), "constant", 0)
+                    # print(bitmasks.shape, bitmasks_full.shape)
+                    # pdb.set_trace()
+                    bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
+                    per_im_gt_inst.gt_bitmasks = bitmasks
+                    per_im_gt_inst.gt_bitmasks_full = bitmasks_full
 
 
     def process_skeleton_feats(self, batched_inputs, im_h, im_w):

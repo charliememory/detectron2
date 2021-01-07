@@ -446,6 +446,8 @@ class DynamicMaskHead(nn.Module):
             ins_mask = gt_bitmasks[cnt:cnt+num,0]
 
             valid_idxs = ins_mask.sum(dim=[1,2]) > 0
+            if ins_mask[valid_idxs].shape[0]==0:
+                pdb.set_trace()
             ins_mask_list.append(ins_mask[valid_idxs])
             cnt += num
             # pdb.set_trace()
@@ -571,7 +573,7 @@ class DynamicMaskHead(nn.Module):
                         for idx in range(N):
                             if idx in im_inds:
                                 # pdb.set_trace()
-                                cc = relative_coords_keep[im_inds==idx,].reshape(-1, 2, H, W)
+                                cc = relative_coords_keep[im_inds==idx,].reshape((im_inds==idx).int().sum(), 2, H, W)
                                 mm = pred_bitmasks[im_inds==idx,]
                                 coord = torch.sum(cc*mm, dim=0, keepdim=True) 
                                 rel_coord_list.append(coord) #.reshape(1, 2, H, W)
@@ -810,12 +812,15 @@ class DynamicMaskHead(nn.Module):
                     for idx in range(N):
                         if idx in im_inds:
                             
-                            cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
-                            mm = pred_bitmasks[im_inds==idx,]
-                            # cc = relative_coords[im_inds==idx,].reshape(-1, 2, s_logits.shape[-2]//2, s_logits.shape[-1]//2)
-                            # ss = F.interpolate(s_logits, scale_factor=0.5)[im_inds==idx,-1:]
-                            # pdb.set_trace()
-                            coord = torch.sum(cc*mm, dim=0, keepdim=True) 
+                            try:
+                                cc = relative_coords[im_inds==idx,].reshape((im_inds==idx).int().sum(), 2, H, W)
+                                mm = pred_bitmasks[im_inds==idx,]
+                                # cc = relative_coords[im_inds==idx,].reshape(-1, 2, s_logits.shape[-2]//2, s_logits.shape[-1]//2)
+                                # ss = F.interpolate(s_logits, scale_factor=0.5)[im_inds==idx,-1:]
+                            
+                                coord = torch.sum(cc*mm, dim=0, keepdim=True) 
+                            except:
+                                pdb.set_trace()
                             rel_coord_list.append(coord) #.reshape(1, 2, H, W)
                             fg_mask_list.append((torch.sum(mm, dim=0, keepdim=True)>0).float())
                             ins_mask_list.append(mm[:,0])

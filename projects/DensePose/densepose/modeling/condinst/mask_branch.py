@@ -15,7 +15,7 @@ from detectron2.layers import Conv2d, ShapeSpec, get_norm
 
 # from adet.layers import conv_with_kaiming_uniform
 # from adet.utils.comm import aligned_bilinear
-from densepose.layers import conv_with_kaiming_uniform
+from densepose.layers import conv_with_kaiming_uniform, SAN_BottleneckGN, SAN_BottleneckGN_GatedEarly, SAN_BottleneckGN_Gated
 from densepose.utils.comm import aligned_bilinear, aligned_bilinear_layer
 # from densepose.roi_heads.deeplab import ASPP
 
@@ -88,6 +88,87 @@ class ASPP(nn.Module):
         return self.project(res)
 
 
+
+class ASPP_share(nn.Module):
+    def __init__(self, in_channels, atrous_rates, out_channels):
+        super(ASPP_share, self).__init__()
+
+        r1, r2, r3 = atrous_rates
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=r1, dilation=r1, bias=False)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, 3, padding=r2, dilation=r2, bias=False)
+        self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding=r3, dilation=r3, bias=False)
+        self.norm1 = nn.GroupNorm(32, out_channels)
+        self.norm2 = nn.GroupNorm(32, out_channels)
+        self.norm3 = nn.GroupNorm(32, out_channels)
+        self.activation = nn.ReLU(inplace=True)
+
+        self.shared_weights = nn.Parameter(torch.randn(self.conv1.weight.shape), requires_grad=True)
+
+        del self.conv1.weight
+        del self.conv2.weight
+        del self.conv3.weight
+
+        self.project = nn.Sequential(
+            nn.Conv2d(3 * out_channels, out_channels, 1, bias=False),
+            nn.GroupNorm(32, out_channels),
+            nn.ReLU(inplace=True)
+            # nn.Dropout(0.5)
+        )
+
+    def forward(self, x):
+        res = []
+        self.conv1.weight = self.shared_weights
+        self.conv2.weight = self.shared_weights
+        self.conv3.weight = self.shared_weights
+        res1 = self.activation(self.norm1(self.conv1(x)))
+        res2 = self.activation(self.norm2(self.conv2(x)))
+        res3 = self.activation(self.norm3(self.conv3(x)))
+        res = torch.cat([res1,res2,res3], dim=1)
+        return self.project(res)
+
+
+class ASPP_share_attn(nn.Module):
+    def __init__(self, in_channels, atrous_rates, out_channels):
+        super(ASPP_share_attn, self).__init__()
+
+        r1, r2, r3 = atrous_rates
+        self.conv1 = nn.Conv2d(in_channels, out_channels, 3, padding=r1, dilation=r1, bias=False)
+        self.conv2 = nn.Conv2d(in_channels, out_channels, 3, padding=r2, dilation=r2, bias=False)
+        self.conv3 = nn.Conv2d(in_channels, out_channels, 3, padding=r3, dilation=r3, bias=False)
+        self.norm1 = nn.GroupNorm(32, out_channels)
+        self.norm2 = nn.GroupNorm(32, out_channels)
+        self.norm3 = nn.GroupNorm(32, out_channels)
+        self.activation = nn.ReLU(inplace=True)
+
+        self.shared_weights = nn.Parameter(torch.randn(self.conv1.weight.shape), requires_grad=True)
+
+        del self.conv1.weight
+        del self.conv2.weight
+        del self.conv3.weight
+
+        self.attn_num = 3
+        self.attn_conv = nn.Conv2d(self.attn_num * out_channels, self.attn_num, 3, padding=1, dilation=1, bias=False)
+        self.attn_norm = nn.GroupNorm(min(out_channels,32), out_channels)
+
+    def forward(self, x):
+        res = []
+        self.conv1.weight = self.shared_weights
+        self.conv2.weight = self.shared_weights
+        self.conv3.weight = self.shared_weights
+        res1 = self.activation(self.norm1(self.conv1(x)))
+        res2 = self.activation(self.norm2(self.conv2(x)))
+        res3 = self.activation(self.norm3(self.conv3(x)))
+        res = torch.cat([res1,res2,res3], dim=1)
+
+
+        attn = self.attn_conv(torch.cat([res1,res2,res3], dim=1))
+        attn = F.softmax(attn, dim=1)
+        attn_list = list(torch.chunk(attn, self.attn_num, dim=1))
+        out = torch.sum(torch.stack([f*a for f,a in zip([res1,res2,res3],attn_list)], dim=0), dim=0)
+
+        return out
+
+
 class eca_layer(nn.Module):
     """Constructs a ECA module.
     Args:
@@ -114,6 +195,20 @@ class eca_layer(nn.Module):
         y = self.sigmoid(y)
 
         return x * y.expand_as(x)
+
+
+from cvpods.layers import TreeFilterV2
+class TreeFilterV2_layer(nn.Module):
+    """Constructs a TreeFilterV2 module.
+    """
+    def __init__(self, in_channels, guide_channels, embed_dim=16, num_groups=16):
+        super(TreeFilterV2_layer, self).__init__()
+        # Initialize the module with specific number of channels and groups
+        self.tf_layer = TreeFilterV2(guide_channels, in_channels, embed_channels=embed_dim, num_groups=num_groups)
+
+    def forward(self, input_feature, guided_feature):
+        # Run the filter procedure with input feature and guided feature
+        return self.tf_layer(input_feature, guided_feature)
 
 
 ## Ref: densepose roi_head.py
@@ -189,9 +284,12 @@ class MaskBranch(nn.Module):
         num_convs = cfg.MODEL.CONDINST.MASK_BRANCH.NUM_CONVS
         agg_channels = cfg.MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS
         channels = cfg.MODEL.CONDINST.MASK_BRANCH.CHANNELS
-        self.out_stride = input_shape[self.in_features[0]].stride
+        self.out_stride = input_shape[cfg.MODEL.CONDINST.MASK_BRANCH.IN_FEATURES[0]].stride
+        # pdb.set_trace()
         self.num_lambda_layer = cfg.MODEL.CONDINST.MASK_BRANCH.NUM_LAMBDA_LAYER
         self.use_aspp = cfg.MODEL.CONDINST.MASK_BRANCH.USE_ASPP
+        self.use_san = cfg.MODEL.CONDINST.MASK_BRANCH.USE_SAN
+        self.san_type = cfg.MODEL.CONDINST.SAN_TYPE
         lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.v2 = cfg.MODEL.CONDINST.v2
@@ -204,6 +302,9 @@ class MaskBranch(nn.Module):
 
         self.use_weight_std = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
         self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
+        self.use_tree_filter = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER
+        self.tf_embed_dim = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER_EMBED_DIM
+        self.tf_group_num = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER_GROUP_NUM
 
         self.add_skeleton_feat = cfg.MODEL.CONDINST.IUVHead.SKELETON_FEATURES
 
@@ -220,6 +321,7 @@ class MaskBranch(nn.Module):
         #     assert agg_channels==cfg.MODEL.ROI_DENSEPOSE_HEAD.DECODER_CONV_DIMS
         # else:
         self.refine = nn.ModuleList()
+        self.tf = nn.ModuleList()
         for idx, in_feature in enumerate(self.in_features):
 
             # if num_lambda_layer>=len(self.in_features)-idx:
@@ -254,6 +356,11 @@ class MaskBranch(nn.Module):
                     # aligned_bilinear_layer(
                     #     factor=2**idx
                     # ),
+                if self.use_tree_filter:
+                    self.tf.append(TreeFilterV2_layer(agg_channels,
+                                                    feature_channels[self.in_features[0]], 
+                                                    embed_dim=self.tf_embed_dim,
+                                                    num_groups=self.tf_group_num))
             else:
                 self.refine.append(
                     conv_block(
@@ -268,14 +375,14 @@ class MaskBranch(nn.Module):
                 agg_channels, 3, 1
             )
 
-
-
         if self.use_eca:
             self.eca = eca_layer(agg_channels, k_size=3)
 
 
         if self.use_aspp:
-            self.ASPP = ASPP(agg_channels, [12, 24, 112], agg_channels)  # 6, 12, 56
+            # self.ASPP = ASPP_share(agg_channels, [1,2,3], agg_channels)  # 6, 12, 56
+            self.ASPP = ASPP_share_attn(agg_channels, [1,2,3], agg_channels)  # 6, 12, 56
+
             self.add_module("ASPP", self.ASPP)
 
         if self.num_lambda_layer>0:
@@ -287,6 +394,18 @@ class MaskBranch(nn.Module):
                 heads = 4,
                 dim_u = 4
             )
+
+        if self.use_san:
+            # sa_type = 1 ## 0: pairwise; 1: patchwise
+            sa_type = 1
+            if self.san_type=="SAN_BottleneckGN":
+                san_func = SAN_BottleneckGN
+            elif self.san_type=="SAN_BottleneckGN_GatedEarly":
+                san_func = SAN_BottleneckGN_GatedEarly
+            elif self.san_type=="SAN_BottleneckGN_Gated":
+                SAN_BottleneckGN_Gated
+            self.san_blk_1 = san_func(sa_type, agg_channels, agg_channels // 16, agg_channels // 4, agg_channels, 8, kernel_size=7, stride=1)
+            
             # agg_channels = channels
         # if "p1" == self.in_features[0]:
         #     self.down_conv = conv_block(
@@ -375,9 +494,15 @@ class MaskBranch(nn.Module):
                 x = self.refine[i](features[f])
             else:
                 if self.v2:
-                    if self.checkpoint_grad_num>0:
-                        modules = [module for k, module in self.refine[i]._modules.items()]
-                        x_p = checkpoint.checkpoint_sequential(modules,1,features[f])
+                    # if self.checkpoint_grad_num>0:
+                    #     modules = [module for k, module in self.refine[i]._modules.items()]
+                    #     x_p = checkpoint.checkpoint_sequential(modules,1,features[f])
+                    # else:
+
+                    if self.use_tree_filter:
+                        # pdb.set_trace()
+                        x_p = self.tf[i-1](features[self.in_features[i]], features[self.in_features[i-1]])
+                        x_p = self.refine[i](x_p)
                     else:
                         x_p = self.refine[i](features[f])
                 else:
@@ -394,14 +519,18 @@ class MaskBranch(nn.Module):
             # pdb.set_trace()
             x = self.conv_skeleton(torch.cat([x,skeleton_feats], dim=1))
 
+        # if self.use_tree_filter:
+        #     x = self.tf_layer(features[self.in_features[0]], x)
+
         if self.use_aspp:
             x = self.ASPP(x)
         if self.num_lambda_layer>0:
             x = self.lambda_layer(x)
         if self.use_eca:
             x = self.eca(x)
+        if self.use_san:
+            x = self.san_blk_1(x)
         agg_feats = x
-        # pdb.set_trace()
         # if "p1" == self.in_features[0]:
         #     mask_feats = self.tower(self.down_conv(x))
 

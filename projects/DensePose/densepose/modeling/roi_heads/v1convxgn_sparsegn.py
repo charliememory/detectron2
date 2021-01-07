@@ -31,60 +31,138 @@ from .registry import ROI_DENSEPOSE_HEAD_REGISTRY
 
 #         return spconv.SparseConvTensor(torch.cat(out_batch, dim=0), indices, (H,W), batch_size)
 
+
+
+
+
 "TODO"
-class SparseInsDilateConv(nn.Module):
-    def __init__(self, num_groups, out_channels):
-        super(SparseInsDilateConv, self).__init__()
+import spconv
+class SubMConv2dInsDilate(spconv.conv.SubMConv2d):
+    # def __init__(self, num_groups, out_channels):
+    #     super(SubMConv2dInsDilate, self).__init__()
 
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation_max=1,
+                 groups=1,
+                 bias=True,
+                 algo=spconv.ops.ConvAlgo.Native):
 
-    # def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any, ins_indices_len):
-    def forward(self, x: spconv.SparseConvTensor, ins_indices_batch: torch.Tensor, ins_ids: Any):
-        N, C = x.features.shape
-        out_batch = []
-        # for i in ins_ids:
-        #     out = self.norm(x.features[ins_indices_batch==i].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
-        #     out_batch.append(out.permute([2,0,1]).reshape([-1,C]))
-        # return spconv.SparseConvTensor(torch.cat(out_batch, dim=0), 
-        #                 x.indices, x.spatial_shape, x.batch_size)
+        super(SubMConv2dInsDilate, self).__init__(
+                                                 in_channels,
+                                                 out_channels,
+                                                 kernel_size,
+                                                 stride=stride,
+                                                 padding=padding,
+                                                 dilation=1,
+                                                 groups=groups,
+                                                 bias=bias,
+                                                 indice_key=None,
+                                                 use_hash=False,
+                                                 algo=algo)
+        self.dilation_max = dilation_max
 
-        # cnt = 0
-        # for ind_len in ins_indices_len.int():
-        #     out = self.norm(x.features[cnt:cnt+ind_len].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
-        #     x.features[cnt:cnt+ind_len] = out.permute([2,0,1]).reshape([-1,C]) 
-        #     cnt += ind_len
-        # assert cnt==N
-        # return x
+    def forward(self, input, ins_indices_batch, ins_ids):
+        assert isinstance(input, spconv.SparseConvTensor)
+        features = input.features
+        device = features.device
+        indices = input.indices
+        spatial_shape = input.spatial_shape
+        batch_size = input.batch_size
+        out_spatial_shape = spatial_shape
+        # input.update_grid(out_spatial_shape)
+        # t = time.time()
 
+        features_list = []
+        outids_list =[]
         for i in ins_ids:
-            # # pdb.set_trace()
-            # try:
-            #     out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
-            #     x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
-            # except Exception as e:
-            #     print(e)
-            #     # print((ins_indices_batch==i).nonzero())
-            #     # pdb.set_trace()
+            indice_key = "ins{}_dilatemax{}".format(i, self.dilation_max)
+            # datas = input.find_indice_pair(indice_key)
+            # if self.indice_key is not None and datas is not None:
+            #     outids, _, indice_pairs, indice_pair_num, _ = datas
+            # else:
+            if indice_key not in input.indice_dict:
+                "Dilation depends on instance size"
+                ins_indices = input.indices[(ins_indices_batch==i).nonzero()].squeeze(1)
+                h_ratio = (ins_indices[:,1].max() - ins_indices[:,1].min()).float()/input.spatial_shape[0]
+                w_ratio = (ins_indices[:,2].max() - ins_indices[:,2].min()).float()/input.spatial_shape[1]
+                d = max(1, math.ceil(max(h_ratio, w_ratio)*self.dilation_max))
+                
+                outids, indice_pairs, indice_pair_num = spconv.ops.get_indice_pairs(
+                    ins_indices,
+                    input.batch_size,
+                    input.spatial_shape,
+                    ksize=self.kernel_size,
+                    stride=self.stride,
+                    padding=self.padding,
+                    dilation=d,
+                    out_padding=self.output_padding,
+                    subm=self.subm,
+                    transpose=self.transposed,
+                    grid=input.grid,
+                    use_hash=self.use_hash
+                    )
+                input.indice_dict[indice_key] = (outids, input.indices,
+                                                      indice_pairs,
+                                                      indice_pair_num,
+                                                      input.spatial_shape)
+            else:
+                datas = input.find_indice_pair(indice_key)
+                outids, _, indice_pairs, indice_pair_num, _ = datas
 
-            "TODO: dilation depends on instance size"
-            pdb.set_trace()
-            outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(
-                x.indices[(ins_indices_batch==i).nonzero(),],
-                x.batch_size,
-                x.spatial_shape,
-                kernel_size=3,
-                stride=1,
-                padding=0,
-                dilation=d,
-                )
-            x.indice_dict["ins_dilate"] = (outids, x.indices,
-                                                  indice_pairs,
-                                                  indice_pair_num,
-                                                  x.spatial_shape)
+            feat = features[(ins_indices_batch==i).nonzero()].squeeze(1)
+            feat = spconv.functional.indice_subm_conv(feat, self.weight,
+                                                indice_pairs.to(device),
+                                                indice_pair_num,
+                                                outids.shape[0], self.algo)
+            features_list.append(feat)
+            outids_list.append(outids)
+
+        out_features = torch.cat(features_list, dim=0)
+        outids = torch.cat(outids_list, dim=0)
+        if self.bias is not None:
+            out_features += self.bias
+        # datas = input.find_indice_pair(indice_key)
+        # if self.indice_key is not None and datas is not None:
+        #     outids, _, indice_pairs, indice_pair_num, _ = datas
+        # else:
+        #     outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(
+        #         indices,
+        #         batch_size,
+        #         spatial_shape,
+        #         self.kernel_size,
+        #         self.stride,
+        #         self.padding,
+        #         self.dilation,
+        #         self.output_padding,
+        #         self.subm,
+        #         self.transposed,
+        #         grid=input.grid,
+        #         use_hash=self.use_hash)
+        #     input.indice_dict[self.indice_key] = (outids, indices,
+        #                                           indice_pairs,
+        #                                           indice_pair_num,
+        #                                           spatial_shape)
+
+        # if self.subm:
+        #     out_features = Fsp.indice_subm_conv(features, self.weight,
+        #                                         indice_pairs.to(device),
+        #                                         indice_pair_num,
+        #                                         outids.shape[0], self.algo)
 
 
+        # if self.bias is not None:
+        #     out_features += self.bias
+        out_tensor = spconv.SparseConvTensor(out_features, outids,
+                                             out_spatial_shape, batch_size)
+        out_tensor.indice_dict = input.indice_dict
+        out_tensor.grid = input.grid
+        return out_tensor
 
-
-        return x
 
 class SparseInsGNBNIN(nn.Module):
     def __init__(self, num_groups, out_channels, norm):
@@ -106,7 +184,8 @@ class SparseInsGNBNIN(nn.Module):
                 out = self.norm(x.features[(ins_indices_batch==i).nonzero(),].reshape([-1,1,C]).permute([1,2,0])) ## HWxBxC -> BxCxHW
                 x.features[(ins_indices_batch==i).nonzero(),] = out.permute([2,0,1]) #.reshape(-1)
             except Exception as e:
-                print(e)
+                # print(e)
+                pass
                 # print((ins_indices_batch==i).nonzero())
                 # pdb.set_trace()
         return x
@@ -143,6 +222,227 @@ class SparseReLU(nn.Module):
         x.features = F.relu(x.features, inplace=self.inplace)
         return x
         # return spconv.SparseConvTensor(F.relu(x.features, inplace=self.inplace), x.indices, x.spatial_shape, x.batch_size)
+
+
+# class ASPP(nn.Module):
+#     def __init__(self, in_channels, atrous_rates, out_channels):
+#         super(ASPP, self).__init__()
+#         modules = []
+#         modules.append(
+#             nn.Sequential(
+#                 nn.Conv2d(in_channels, out_channels, 1, bias=False),
+#                 nn.GroupNorm(32, out_channels),
+#                 nn.ReLU(),
+#             )
+#         )
+
+#         rate1, rate2, rate3 = tuple(atrous_rates)
+#         modules.append(ASPPConv(in_channels, out_channels, rate1))
+#         modules.append(ASPPConv(in_channels, out_channels, rate2))
+#         modules.append(ASPPConv(in_channels, out_channels, rate3))
+#         modules.append(ASPPPooling(in_channels, out_channels))
+
+#         self.convs = nn.ModuleList(modules)
+
+#         self.project = nn.Sequential(
+#             nn.Conv2d(len(self.convs) * out_channels, out_channels, 1, bias=False),
+#             # nn.BatchNorm2d(out_channels),
+#             nn.ReLU()
+#             # nn.Dropout(0.5)
+#         )
+
+#     def forward(self, x):
+#         res = []
+#         for conv in self.convs:
+#             res.append(conv(x))
+#         res = torch.cat(res, dim=1)
+#         return self.project(res)
+
+class SubMConv2dASPP(nn.Module):
+    # def __init__(self, num_groups, out_channels):
+    #     super(SubMConv2dInsDilate, self).__init__()
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 norm="InsIN",
+                 stride=1,
+                 padding=0,
+                 atrous_rates=[1,3,5],
+                 groups=1,
+                 bias=True,
+                 algo=spconv.ops.ConvAlgo.Native):
+        super(SubMConv2dASPP, self).__init__()
+
+        self.fuse_conv = spconv.conv.SubMConv2d(
+                             in_channels+out_channels*3,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation=1,
+                             bias=bias,
+                             algo=algo,
+                             indice_key="subm0",)
+        self.aspp_conv1 = spconv.conv.SubMConv2d(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation=atrous_rates[0],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo,
+                             indice_key="subm0_aspp1",)
+        self.aspp_norm1 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu1 = SparseReLU()
+        self.aspp_conv2 = spconv.conv.SubMConv2d(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation=atrous_rates[1],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo,
+                             indice_key="subm0_aspp2")
+        self.aspp_norm2 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu2 = SparseReLU()
+        self.aspp_conv3 = spconv.conv.SubMConv2d(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation=atrous_rates[2],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo,
+                             indice_key="subm0_aspp3")
+        self.aspp_norm3 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu3 = SparseReLU()
+        # self.aspp_conv1 = SubMConv2dInsDilate(
+        #                      in_channels,
+        #                      out_channels,
+        #                      kernel_size,
+        #                      stride=stride,
+        #                      padding=padding,
+        #                      dilation_max=dilation_max,
+        #                      groups=groups,
+        #                      bias=bias,
+        #                      algo=algo)
+        # self.aspp_conv2 = SubMConv2dInsDilate(
+        #                      in_channels,
+        #                      out_channels,
+        #                      kernel_size,
+        #                      stride=stride,
+        #                      padding=padding,
+        #                      dilation_max=dilation_max*2,
+        #                      groups=groups,
+        #                      bias=bias,
+        #                      algo=algo)
+        # self.aspp_conv3 = SubMConv2dInsDilate(
+        #                      in_channels,
+        #                      out_channels,
+        #                      kernel_size,
+        #                      stride=stride,
+        #                      padding=padding,
+        #                      dilation_max=dilation_max*4,
+        #                      groups=groups,
+        #                      bias=bias,
+        #                      algo=algo)
+        self.join_sparse = spconv.tables.JoinTable()
+
+    def forward(self, input, ins_indices_batch, ins_ids):
+        assert isinstance(input, spconv.SparseConvTensor)
+
+        aspp1 = self.aspp_relu1(self.aspp_norm1(self.aspp_conv1(input), ins_indices_batch, ins_ids))
+        aspp2 = self.aspp_relu2(self.aspp_norm2(self.aspp_conv2(input), ins_indices_batch, ins_ids))
+        aspp3 = self.aspp_relu3(self.aspp_norm3(self.aspp_conv3(input), ins_indices_batch, ins_ids))
+        # aspp1 = self.aspp_conv1(input, ins_indices_batch, ins_ids)
+        # aspp2 = self.aspp_conv2(input, ins_indices_batch, ins_ids)
+        # aspp3 = self.aspp_conv3(input, ins_indices_batch, ins_ids)
+        return self.fuse_conv(self.join_sparse([input,aspp1,aspp2,aspp3]))
+
+
+class SubMConv2dInsDilateASPP(nn.Module):
+    # def __init__(self, num_groups, out_channels):
+    #     super(SubMConv2dInsDilate, self).__init__()
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 norm="InsIN",
+                 stride=1,
+                 padding=0,
+                 atrous_rates=[1,3,5],
+                 groups=1,
+                 bias=True,
+                 algo=spconv.ops.ConvAlgo.Native):
+        super(SubMConv2dInsDilateASPP, self).__init__()
+
+        self.fuse_conv = spconv.conv.SubMConv2d(
+                             in_channels+out_channels*3,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation=1,
+                             bias=bias,
+                             algo=algo,
+                             indice_key="subm0",)
+        self.aspp_conv1 = SubMConv2dInsDilate(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation_max=atrous_rates[0],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo)
+        self.aspp_norm1 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu1 = SparseReLU()
+        self.aspp_conv2 = SubMConv2dInsDilate(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation_max=atrous_rates[1],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo)
+        self.aspp_norm2 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu2 = SparseReLU()
+        self.aspp_conv3 = SubMConv2dInsDilate(
+                             in_channels,
+                             out_channels,
+                             kernel_size,
+                             stride=stride,
+                             padding=padding,
+                             dilation_max=atrous_rates[2],
+                             groups=groups,
+                             bias=bias,
+                             algo=algo)
+        self.aspp_norm3 = SparseInsGNBNIN(32, out_channels, norm)
+        self.aspp_relu3 = SparseReLU()
+        self.join_sparse = spconv.tables.JoinTable()
+
+    def forward(self, input, ins_indices_batch, ins_ids):
+        assert isinstance(input, spconv.SparseConvTensor)
+
+        aspp1 = self.aspp_relu1(self.aspp_norm1(self.aspp_conv1(input, ins_indices_batch, ins_ids), ins_indices_batch, ins_ids))
+        aspp2 = self.aspp_relu2(self.aspp_norm2(self.aspp_conv2(input, ins_indices_batch, ins_ids), ins_indices_batch, ins_ids))
+        aspp3 = self.aspp_relu3(self.aspp_norm3(self.aspp_conv3(input, ins_indices_batch, ins_ids), ins_indices_batch, ins_ids))
+        # aspp1 = self.aspp_conv1(input, ins_indices_batch, ins_ids)
+        # aspp2 = self.aspp_conv2(input, ins_indices_batch, ins_ids)
+        # aspp3 = self.aspp_conv3(input, ins_indices_batch, ins_ids)
+        return self.fuse_conv(self.join_sparse([input,aspp1,aspp2,aspp3]))
 
 
 class Conv1dWS(nn.Conv1d):
@@ -269,12 +569,14 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         self.use_ins_gn      = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN
         self.use_ins_conv    = cfg.MODEL.CONDINST.IUVHead.INSTANCE_AWARE_CONV
         self.use_weight_std  = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
+        self.use_submconv  = cfg.MODEL.CONDINST.IUVHead.SUBM_CONV
         # self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
         self.use_eca = False
         self.use_ins_eca = cfg.MODEL.CONDINST.IUVHead.INSTANCE_EFFICIENT_CHANNEL_ATTENTION
         self.use_res_input    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_INPUT
         self.use_res_after_relu    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_AFTER_RELU
         self.use_res_later   = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_LATER
+        self.use_res_skip_conv    = cfg.MODEL.CONDINST.IUVHead.RESIDUAL_SKIP_CONV
         self.dilated_conv_type = cfg.MODEL.CONDINST.IUVHead.DILATION_CONV
         self.dilated_conv_r_max = cfg.MODEL.CONDINST.IUVHead.DILATION_CONV_R_MAX
         self.add_sparse = spconv.tables.AddTable()
@@ -288,178 +590,459 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         from torch.cuda.amp import autocast
         with autocast():
             conv = sparse_conv_with_kaiming_uniform(norm=None, activation=None, use_sep=False, 
-                                use_submconv=True, use_deconv=False, use_weight_std=self.use_weight_std)
+                                use_submconv=self.use_submconv, use_deconv=False, use_weight_std=self.use_weight_std)
             cnt = 0
             self.layers = []
             self.pad = 0
+            if self.use_res_skip_conv:
+                self.res_skip_convs = []
+                for ii in range(3):
+                    layer_list = []
+                    layer = conv(
+                        n_channels,
+                        hidden_dim,
+                        kernel_size,
+                        stride=1,
+                        padding=self.pad,
+                        dilation=1,
+                        indice_key="subm0",
+                    )
+                    layer_list.append(layer)
+                    self.add_module("res_skip_conv{}".format(ii), layer)
+                    if norm in ["GN","BN"]:
+                        layer = SparseGNBN(32, hidden_dim, norm)
+                    elif norm in ["InsGN","InsBN","InsIN"]:
+                        layer = SparseInsGNBNIN(32, hidden_dim, norm)
+                    layer_list.append(layer)
+                    self.add_module("res_skip_norm{}".format(ii), layer)
+                    layer = SparseReLU(inplace=True)
+                    layer_list.append(layer)
+                    self.add_module("res_skip_relu{}".format(ii), layer)
+                    self.res_skip_convs.append(layer_list)
+
             for i in range(self.n_stacked_convs):
-                if self.dilated_conv_type=="one_layer_ori":
-                    if i in [3]:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=self.dilated_conv_r_max,
-                            indice_key="subm0_insconv_adapt",
-                        )
-                    else:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm0_insconv",
-                        )
-                elif self.dilated_conv_type=="progressive_ori":
-                    if i==3:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm0_insconv_adapt",
-                        )
-                    elif i==6:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm1_insconv_adapt",
-                        )
-                    elif i==9:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm2_insconv_adapt",
-                        )
-                    else:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm0_insconv",
-                        )
-                else:
-                    if i<12:
-                        layer = conv(
-                            n_channels,
-                            hidden_dim,
-                            kernel_size,
-                            stride=1,
-                            padding=self.pad,
-                            dilation=1,
-                            indice_key="subm0",
-                        )
-                    else:
-                        if self.dilated_conv_type=="none":
-                            layer = conv(
-                                n_channels,
-                                hidden_dim,
-                                kernel_size,
-                                stride=1,
-                                padding=self.pad,
-                                dilation=1,
-                                indice_key="subm0",
-                            )
-                        elif self.dilated_conv_type=="one_layer":
-                            if i in [12]:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=self.dilated_conv_r_max,
-                                    indice_key="subm0_insconv_adapt",
-                                )
-                            else:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=1,
-                                    indice_key="subm0_insconv",
-                                )
-                        # elif self.dilated_conv_type=="all_layers":
-                        #     if i>2:
-                        #         layer = conv(
-                        #             n_channels,
-                        #             hidden_dim,
-                        #             kernel_size,
-                        #             stride=1,
-                        #             padding=self.pad,
-                        #             dilation=1,
-                        #             indice_key="subm0_adapt",
-                        #         )
-                        #     else:
-                        #         layer = conv(
-                        #             n_channels,
-                        #             hidden_dim,
-                        #             kernel_size,
-                        #             stride=1,
-                        #             padding=self.pad,
-                        #             dilation=1,
-                        #             indice_key="subm0",
-                        #         )
-                        elif self.dilated_conv_type=="progressive":
-                            if i==12:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=1,
-                                    indice_key="subm0_insconv_adapt",
-                                )
-                            elif i==15:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=1,
-                                    indice_key="subm1_insconv_adapt",
-                                )
-                            elif i==18:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=1,
-                                    indice_key="subm2_insconv_adapt",
-                                )
-                            else:
-                                layer = conv(
-                                    n_channels,
-                                    hidden_dim,
-                                    kernel_size,
-                                    stride=1,
-                                    padding=self.pad,
-                                    dilation=1,
-                                    indice_key="subm0_insconv",
-                                )
+                # pdb.set_trace()
+                if self.dilated_conv_type=="none":
+                    layer = conv(
+                        n_channels,
+                        hidden_dim,
+                        kernel_size,
+                        stride=1,
+                        padding=self.pad,
+                        dilation=1,
+                        indice_key="subm0",
+                    )
+                # if self.dilated_conv_type=="one_layer_ori":
+                #     if cnt<12:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [12]:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=self.dilated_conv_r_max,
+                #             indice_key="subm0_insconv_adapt",
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0_insconv",
+                #         )
+                # elif self.dilated_conv_type=="progressive_ori":
+                #     if cnt<12:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt==12:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0_insconv_adapt",
+                #         )
+                #     elif cnt==15:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm1_insconv_adapt",
+                #         )
+                #     elif cnt==18:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm2_insconv_adapt",
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0_insconv",
+                #         )
+                # elif self.dilated_conv_type=="one_layer":
+                #     if cnt<12:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [12]:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max
+                #         )
+                #         # layer = conv(
+                #         #     n_channels,
+                #         #     hidden_dim,
+                #         #     kernel_size,
+                #         #     stride=1,
+                #         #     padding=self.pad,
+                #         #     dilation=self.dilated_conv_r_max,
+                #         #     indice_key="subm0_insconv_adapt",
+                #         # )
+                #     elif self.use_ins_conv:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=1
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #         # layer = conv(
+                #         #     n_channels,
+                #         #     hidden_dim,
+                #         #     kernel_size,
+                #         #     stride=1,
+                #         #     padding=self.pad,
+                #         #     dilation=1,
+                #         #     indice_key="subm0_insconv",
+                #         # )
+                # elif self.dilated_conv_type=="aspp":
+                #     if cnt<6:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [6]:
+                #         d = self.dilated_conv_r_max
+                #         layer = SubMConv2dASPP(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              norm=norm,
+                #              stride=1,
+                #              padding=self.pad,
+                #              atrous_rates=[d,d+2,d+4]
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="aspp_large":
+                #     if cnt<6:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [6]:
+                #         d = self.dilated_conv_r_max
+                #         layer = SubMConv2dASPP(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              norm=norm,
+                #              stride=1,
+                #              padding=self.pad,
+                #              atrous_rates=[d,d*2,d*4]
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="aspp_large":
+                #     if cnt<6:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [6]:
+                #         d = self.dilated_conv_r_max
+                #         layer = SubMConv2dASPP(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              norm=norm,
+                #              stride=1,
+                #              padding=self.pad,
+                #              atrous_rates=[d,d*2,d*4]
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="aspp_larger":
+                #     if cnt<6:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [6]:
+                #         d = self.dilated_conv_r_max
+                #         layer = SubMConv2dASPP(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              norm=norm,
+                #              stride=1,
+                #              padding=self.pad,
+                #              atrous_rates=[d,d*2,d*8]
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="ins_dilate_aspp":
+                #     if cnt<6:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                #     elif cnt in [6]:
+                #         d = self.dilated_conv_r_max
+                #         layer = SubMConv2dInsDilateASPP(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              norm=norm,
+                #              stride=1,
+                #              padding=self.pad,
+                #              atrous_rates=[d,d+2,d+4]
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="progressive":
+                #     if cnt==0:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max
+                #         )
+                #         # layer = conv(
+                #         #     n_channels,
+                #         #     hidden_dim,
+                #         #     kernel_size,
+                #         #     stride=1,
+                #         #     padding=self.pad,
+                #         #     dilation=1,
+                #         #     indice_key="subm0_insconv_adapt",
+                #         # )
+                #     elif cnt==9:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max*2
+                #         )
+                #         # layer = conv(
+                #         #     n_channels,
+                #         #     hidden_dim,
+                #         #     kernel_size,
+                #         #     stride=1,
+                #         #     padding=self.pad,
+                #         #     dilation=1,
+                #         #     indice_key="subm1_insconv_adapt",
+                #         # )
+                #     elif cnt==18:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max*4
+                #         )
+                #         # layer = conv(
+                #         #     n_channels,
+                #         #     hidden_dim,
+                #         #     kernel_size,
+                #         #     stride=1,
+                #         #     padding=self.pad,
+                #         #     dilation=1,
+                #         #     indice_key="subm2_insconv_adapt",
+                #         # )
+                #     elif self.use_ins_conv:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=1
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
+                # elif self.dilated_conv_type=="two_layers":
+                #     if cnt==6:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max
+                #         )
+                #     elif cnt==15:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=self.dilated_conv_r_max
+                #         )
+                #     elif self.use_ins_conv:
+                #         layer = SubMConv2dInsDilate(
+                #              n_channels,
+                #              hidden_dim,
+                #              kernel_size,
+                #              stride=1,
+                #              padding=self.pad,
+                #              dilation_max=1
+                #         )
+                #     else:
+                #         layer = conv(
+                #             n_channels,
+                #             hidden_dim,
+                #             kernel_size,
+                #             stride=1,
+                #             padding=self.pad,
+                #             dilation=1,
+                #             indice_key="subm0",
+                #         )
 
                 # layer_name = self._get_layer_name(cnt)
                 self.add_module("layer{}".format(cnt), layer)
@@ -665,10 +1248,13 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
 
         # batch_indices = features.indices[:,0:1].expand_as(features.features)
         x = features
+        # pdb.set_trace()
         # output = x
         "TODO: change ins_indices_batch to start-end slice to save GPU Memory"
         ins_ids = torch.unique(ins_indices_batch)
-        x, ins_indices_batch = self.rearrange_inputs(x, ins_indices_batch, ins_ids)
+        if self.dilated_conv_type!="none":
+            print("rearrange_inputs")
+            x, ins_indices_batch = self.rearrange_inputs(x, ins_indices_batch, ins_ids)
         # ins_indices_batch = ins_indices_batch[...,None].expand_as(x.features)
         # pdb.set_trace()
 
@@ -676,17 +1262,17 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         #     x.features = x.features.half()
         # pdb.set_trace()
 
-        if self.use_ins_conv:
-            x.indice_dict["subm0_insconv"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, 1)
-        if self.dilated_conv_type!="none":
-            # assert self.use_ins_conv
+        if "ori" in self.dilated_conv_type:
+            if self.use_ins_conv:
+                x.indice_dict["subm0_insconv"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, 1)
+            # if self.dilated_conv_type!="none":
+                # assert self.use_ins_conv
             x.indice_dict["subm0_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max)
             if "progressive" in self.dilated_conv_type:
                 x.indice_dict["subm1_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max*2)
                 x.indice_dict["subm2_insconv_adapt"] = self.create_dilated_indices(x, ins_indices_batch, ins_ids, self.dilated_conv_r_max*4)
 
         res = None
-        # pdb.set_trace()
         for idx, layer in enumerate(self.layers):
             # if self.use_res_later:
             #     if idx==3:
@@ -726,14 +1312,21 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
             #         x = checkpoint.checkpoint(self.custom(layer), x)
             #     else:
             #         x = layer(x)
-            if isinstance(layer,SparseInsGNBNIN) or isinstance(layer,SparseInsECA):
+            # if isinstance(layer, SubMConv2dInsDilate):
+            #     pdb.set_trace()
+            if isinstance(layer, SparseInsGNBNIN) \
+                or isinstance(layer, SparseInsECA) \
+                or isinstance(layer, SubMConv2dInsDilate)\
+                or isinstance(layer, SubMConv2dInsDilateASPP)\
+                or isinstance(layer, SubMConv2dASPP):
                 # x = layer(x, ins_indices_batch, ins_ids, ins_indices_len)
                 x = layer(x, ins_indices_batch, ins_ids)
             else:
                 # print(idx, x.indice_dict.keys(), x.indices.shape)
                 try:
                     x = layer(x)
-                except:
+                except Exception as e:
+                    print(e)
                     pdb.set_trace()
                 # print(idx, x.indice_dict.keys())
                 # pdb.set_trace()
@@ -748,6 +1341,18 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
                             x = self.add_sparse([x,res])
                 else:
                     if idx in [5,14,23,32,41]:
+                        if self.use_res_skip_conv:
+                            if idx==5:
+                                layer_list = self.res_skip_convs[0]
+                            if idx==14:
+                                layer_list = self.res_skip_convs[1]
+                            if idx==23:
+                                layer_list = self.res_skip_convs[2]
+                            for l in layer_list:
+                                if isinstance(l, SparseInsGNBNIN):
+                                    res = l(res, ins_indices_batch, ins_ids)
+                                else:
+                                    res = l(res)
                         x = self.add_sparse([x,res])
 
 

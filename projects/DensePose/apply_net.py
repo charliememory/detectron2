@@ -262,6 +262,9 @@ class DumpAction(InferenceAction):
             result["pred_boxes_XYXY"] = outputs.get("pred_boxes").tensor.cpu()
             if outputs.has("pred_densepose"):
                 result["pred_densepose"], _ = DensePoseResultExtractor()(outputs)
+                for i in range(len(result["pred_densepose"])):
+                    result["pred_densepose"][i].labels = result["pred_densepose"][i].labels.cpu()
+                    result["pred_densepose"][i].uv = result["pred_densepose"][i].uv.cpu()
         context["results"].append(result)
 
     @classmethod

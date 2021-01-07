@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-import copy, pdb
+import copy, pdb, imageio
 import logging
 from typing import Any, Dict, Tuple, List
 import torch
@@ -26,7 +26,9 @@ def build_augmentation(cfg, is_train):
         random_rotation = T.RandomRotation(
             cfg.INPUT.ROTATION_ANGLES, expand=False, sample_style="choice"
         )
-        result.append(random_rotation)
+        # if cfg.MODEL.CONDINST.RAND_FLIP:
+        #     random_hflip = T.HFlipTransform(width=0)
+        #     result.append(random_hflip)
         logger.info("DensePose-specific augmentation used in training: " + str(random_rotation))
     return result
 
@@ -101,7 +103,10 @@ class DatasetMapper:
         image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
         utils.check_image_size(dataset_dict, image)
 
+        # imageio.imwrite('output/tmp/img_ori.jpg', image)
         image, transforms = T.apply_transform_gens(self.augmentation, image)
+        # imageio.imwrite('output/tmp/img_transformed.jpg', image)
+        # pdb.set_trace()
         image_shape = image.shape[:2]  # h, w
         dataset_dict["image"] = torch.as_tensor(image.transpose(2, 0, 1).astype("float32"))
 
@@ -149,6 +154,7 @@ class DatasetMapper:
 
         # USER: Implement additional transformations if you have other types of data
         # USER: Don't call transpose_densepose if you don't need
+        # pdb.set_trace()
         annos = [
             self._transform_densepose(
                 utils.transform_instance_annotations(
@@ -169,7 +175,7 @@ class DatasetMapper:
             instances.gt_densepose = DensePoseList(
                 densepose_annotations, instances.gt_boxes, image_shape
             )
-
+        # pdb.set_trace()
         if self.keypoint_on:
             dataset_dict["skeleton_feat"] = self._get_skeleton_feat(annos, image_shape)
             # if ske_feat is not None:
