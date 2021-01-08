@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+# Copyright (c) Facebook, Inc. and its affiliates.
 """
 Wrappers around on some nn functions, mainly to support empty tensors.
 
@@ -85,7 +85,7 @@ class Conv2d(torch.nn.Conv2d):
 
 ConvTranspose2d = torch.nn.ConvTranspose2d
 BatchNorm2d = torch.nn.BatchNorm2d
-interpolate = torch.nn.functional.interpolate
+interpolate = F.interpolate
 
 
 if TORCH_VERSION > (1, 5):
@@ -120,6 +120,9 @@ def nonzero_tuple(x):
     A 'as_tuple=True' version of torch.nonzero to support torchscript.
     because of https://github.com/pytorch/pytorch/issues/38718
     """
-    if x.dim() == 0:
-        return x.unsqueeze(0).nonzero().unbind(1)
-    return x.nonzero().unbind(1)
+    if torch.jit.is_scripting():
+        if x.dim() == 0:
+            return x.unsqueeze(0).nonzero().unbind(1)
+        return x.nonzero().unbind(1)
+    else:
+        return x.nonzero(as_tuple=True)

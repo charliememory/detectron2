@@ -19,7 +19,7 @@ from densepose.layers import conv_with_kaiming_uniform, SAN_BottleneckGN, SAN_Bo
 from densepose.utils.comm import aligned_bilinear, aligned_bilinear_layer
 # from densepose.roi_heads.deeplab import ASPP
 
-from lambda_networks import LambdaLayer
+# from lambda_networks import LambdaLayer
 
 INF = 100000000
 
@@ -197,18 +197,18 @@ class eca_layer(nn.Module):
         return x * y.expand_as(x)
 
 
-from cvpods.layers import TreeFilterV2
-class TreeFilterV2_layer(nn.Module):
-    """Constructs a TreeFilterV2 module.
-    """
-    def __init__(self, in_channels, guide_channels, embed_dim=16, num_groups=16):
-        super(TreeFilterV2_layer, self).__init__()
-        # Initialize the module with specific number of channels and groups
-        self.tf_layer = TreeFilterV2(guide_channels, in_channels, embed_channels=embed_dim, num_groups=num_groups)
+# from cvpods.layers import TreeFilterV2
+# class TreeFilterV2_layer(nn.Module):
+#     """Constructs a TreeFilterV2 module.
+#     """
+#     def __init__(self, in_channels, guide_channels, embed_dim=16, num_groups=16):
+#         super(TreeFilterV2_layer, self).__init__()
+#         # Initialize the module with specific number of channels and groups
+#         self.tf_layer = TreeFilterV2(guide_channels, in_channels, embed_channels=embed_dim, num_groups=num_groups)
 
-    def forward(self, input_feature, guided_feature):
-        # Run the filter procedure with input feature and guided feature
-        return self.tf_layer(input_feature, guided_feature)
+#     def forward(self, input_feature, guided_feature):
+#         # Run the filter procedure with input feature and guided feature
+#         return self.tf_layer(input_feature, guided_feature)
 
 
 ## Ref: densepose roi_head.py
@@ -286,11 +286,11 @@ class MaskBranch(nn.Module):
         channels = cfg.MODEL.CONDINST.MASK_BRANCH.CHANNELS
         self.out_stride = input_shape[cfg.MODEL.CONDINST.MASK_BRANCH.IN_FEATURES[0]].stride
         # pdb.set_trace()
-        self.num_lambda_layer = cfg.MODEL.CONDINST.MASK_BRANCH.NUM_LAMBDA_LAYER
+        # self.num_lambda_layer = cfg.MODEL.CONDINST.MASK_BRANCH.NUM_LAMBDA_LAYER
         self.use_aspp = cfg.MODEL.CONDINST.MASK_BRANCH.USE_ASPP
         self.use_san = cfg.MODEL.CONDINST.MASK_BRANCH.USE_SAN
         self.san_type = cfg.MODEL.CONDINST.SAN_TYPE
-        lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
+        # lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.v2 = cfg.MODEL.CONDINST.v2
         self.use_res_input   = cfg.MODEL.CONDINST.MASK_BRANCH.RESIDUAL_INPUT
@@ -302,7 +302,7 @@ class MaskBranch(nn.Module):
 
         self.use_weight_std = cfg.MODEL.CONDINST.IUVHead.WEIGHT_STANDARDIZATION
         self.use_eca = cfg.MODEL.CONDINST.IUVHead.Efficient_Channel_Attention
-        self.use_tree_filter = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER
+        # self.use_tree_filter = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER
         self.tf_embed_dim = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER_EMBED_DIM
         self.tf_group_num = cfg.MODEL.CONDINST.MASK_BRANCH.TREE_FILTER_GROUP_NUM
 
@@ -356,11 +356,11 @@ class MaskBranch(nn.Module):
                     # aligned_bilinear_layer(
                     #     factor=2**idx
                     # ),
-                if self.use_tree_filter:
-                    self.tf.append(TreeFilterV2_layer(agg_channels,
-                                                    feature_channels[self.in_features[0]], 
-                                                    embed_dim=self.tf_embed_dim,
-                                                    num_groups=self.tf_group_num))
+                # if self.use_tree_filter:
+                #     self.tf.append(TreeFilterV2_layer(agg_channels,
+                #                                     feature_channels[self.in_features[0]], 
+                #                                     embed_dim=self.tf_embed_dim,
+                #                                     num_groups=self.tf_group_num))
             else:
                 self.refine.append(
                     conv_block(
@@ -385,15 +385,15 @@ class MaskBranch(nn.Module):
 
             self.add_module("ASPP", self.ASPP)
 
-        if self.num_lambda_layer>0:
-            self.lambda_layer = LambdaLayer(
-                dim = agg_channels,
-                dim_out = agg_channels,
-                r = lambda_layer_r,         # the receptive field for relative positional encoding (23 x 23)
-                dim_k = 16,
-                heads = 4,
-                dim_u = 4
-            )
+        # if self.num_lambda_layer>0:
+        #     self.lambda_layer = LambdaLayer(
+        #         dim = agg_channels,
+        #         dim_out = agg_channels,
+        #         r = lambda_layer_r,         # the receptive field for relative positional encoding (23 x 23)
+        #         dim_k = 16,
+        #         heads = 4,
+        #         dim_u = 4
+        #     )
 
         if self.use_san:
             # sa_type = 1 ## 0: pairwise; 1: patchwise
@@ -499,12 +499,12 @@ class MaskBranch(nn.Module):
                     #     x_p = checkpoint.checkpoint_sequential(modules,1,features[f])
                     # else:
 
-                    if self.use_tree_filter:
-                        # pdb.set_trace()
-                        x_p = self.tf[i-1](features[self.in_features[i]], features[self.in_features[i-1]])
-                        x_p = self.refine[i](x_p)
-                    else:
-                        x_p = self.refine[i](features[f])
+                    # if self.use_tree_filter:
+                    #     # pdb.set_trace()
+                    #     x_p = self.tf[i-1](features[self.in_features[i]], features[self.in_features[i-1]])
+                    #     x_p = self.refine[i](x_p)
+                    # else:
+                    x_p = self.refine[i](features[f])
                 else:
                     x_p = self.refine[i](features[f])
                     target_h, target_w = x.size()[2:]
@@ -524,8 +524,8 @@ class MaskBranch(nn.Module):
 
         if self.use_aspp:
             x = self.ASPP(x)
-        if self.num_lambda_layer>0:
-            x = self.lambda_layer(x)
+        # if self.num_lambda_layer>0:
+        #     x = self.lambda_layer(x)
         if self.use_eca:
             x = self.eca(x)
         if self.use_san:

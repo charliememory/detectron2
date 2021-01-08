@@ -1,30 +1,17 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
+# Copyright (c) Facebook, Inc. and its affiliates.
 
 
 import itertools
 import numpy as np
 import unittest
 from contextlib import contextmanager
+from copy import deepcopy
 import torch
-from torch.cuda.amp import autocast
 
-import detectron2.model_zoo as model_zoo
-from detectron2.config import get_cfg
-from detectron2.modeling import build_model
 from detectron2.structures import BitMasks, Boxes, ImageList, Instances
+from detectron2.utils.env import TORCH_VERSION
 from detectron2.utils.events import EventStorage
-
-
-def get_model_zoo(config_path):
-    """
-    Like model_zoo.get, but do not load any weights (even pretrained)
-    """
-    cfg_file = model_zoo.get_config_file(config_path)
-    cfg = get_cfg()
-    cfg.merge_from_file(cfg_file)
-    if not torch.cuda.is_available():
-        cfg.MODEL.DEVICE = "cpu"
-    return build_model(cfg)
+from detectron2.utils.testing import get_model_no_weights
 
 
 @contextmanager
@@ -90,7 +77,7 @@ def get_regular_bitmask_instances(h, w):
 class ModelE2ETest:
     def setUp(self):
         torch.manual_seed(43)
-        self.model = get_model_zoo(self.CONFIG_PATH)
+        self.model = get_model_no_weights(self.CONFIG_PATH)
 
     def _test_eval(self, input_sizes):
         inputs = [create_model_input(torch.rand(3, s[0], s[1])) for s in input_sizes]
@@ -122,7 +109,7 @@ class ModelE2ETest:
 
     @unittest.skipIf(not torch.cuda.is_available(), "CUDA unavailable")
     def test_eval_tocpu(self):
-        model = get_model_zoo(self.CONFIG_PATH).cpu()
+        model = deepcopy(self.model).cpu()
         model.eval()
         input_sizes = [(200, 250), (200, 249)]
         inputs = [create_model_input(torch.rand(3, s[0], s[1])) for s in input_sizes]
@@ -168,7 +155,12 @@ class MaskRCNNE2ETest(ModelE2ETest, unittest.TestCase):
             det, _ = self.model.roi_heads(images, features, props)
             self.assertEqual(len(det[0]), 0)
 
+    @unittest.skipIf(
+        TORCH_VERSION < (1, 6) or not torch.cuda.is_available(), "Insufficient pytorch version"
+    )
     def test_autocast(self):
+        from torch.cuda.amp import autocast
+
         inputs = [{"image": torch.rand(3, 100, 100)}]
         self.model.eval()
         with autocast(), typecheck_hook(
@@ -208,7 +200,12 @@ class RetinaNetE2ETest(ModelE2ETest, unittest.TestCase):
             if len(det[0]):
                 self.assertTrue(torch.isfinite(det[0].pred_boxes.tensor).sum() == 0)
 
+    @unittest.skipIf(
+        TORCH_VERSION < (1, 6) or not torch.cuda.is_available(), "Insufficient pytorch version"
+    )
     def test_autocast(self):
+        from torch.cuda.amp import autocast
+
         inputs = [{"image": torch.rand(3, 100, 100)}]
         self.model.eval()
         with autocast(), typecheck_hook(

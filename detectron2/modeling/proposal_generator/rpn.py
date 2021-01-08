@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+# Copyright (c) Facebook, Inc. and its affiliates.
 from typing import Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
@@ -434,7 +434,6 @@ class RPN(nn.Module):
             x.view(x.shape[0], -1, self.anchor_generator.box_dim, x.shape[-2], x.shape[-1])
             .permute(0, 3, 4, 1, 2)
             .flatten(1, -2)
-            .float()  # ensure fp32 for decoding precision
             for x in pred_anchor_deltas
         ]
 

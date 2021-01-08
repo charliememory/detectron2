@@ -22,6 +22,8 @@ def add_dataset_category_config(cfg: CN):
     _C = cfg
     _C.DATASETS.CATEGORY_MAPS = CN(new_allowed=True)
     _C.DATASETS.WHITELISTED_CATEGORIES = CN(new_allowed=True)
+    # class to mesh mapping
+    _C.DATASETS.CLASS_TO_MESH_NAME_MAPPING = CN(new_allowed=True)
 
 
 def add_bootstrap_config(cfg: CN):
@@ -91,6 +93,14 @@ def add_densepose_head_cse_config(cfg: CN):
     _C.MODEL.ROI_DENSEPOSE_HEAD.CSE.GEODESIC_DIST_GAUSS_SIGMA = 0.01
     # embedding loss weight
     _C.MODEL.ROI_DENSEPOSE_HEAD.CSE.EMBED_LOSS_WEIGHT = 0.6
+    # embedding loss name, currently the following options are supported:
+    # - EmbeddingLoss: cross-entropy on vertex labels
+    # - SoftEmbeddingLoss: cross-entropy on vertex label combined with
+    #    Gaussian penalty on distance between vertices
+    _C.MODEL.ROI_DENSEPOSE_HEAD.CSE.EMBED_LOSS_NAME = "EmbeddingLoss"
+    # optimizer hyperparameters
+    _C.MODEL.ROI_DENSEPOSE_HEAD.CSE.FEATURES_LR_FACTOR = 1.0
+    _C.MODEL.ROI_DENSEPOSE_HEAD.CSE.EMBEDDING_LR_FACTOR = 1.0
 
 def add_densepose_head_config(cfg: CN):
     """
@@ -172,6 +182,8 @@ def add_densepose_head_config(cfg: CN):
     # List of angles for rotation in data augmentation during training
     _C.INPUT.ROTATION_ANGLES = [0]
     _C.TEST.AUG.ROTATION_ANGLES = ()  # Rotation TTA
+
+    add_densepose_head_cse_config(cfg)
 
 
 def add_hrnet_config(cfg: CN):

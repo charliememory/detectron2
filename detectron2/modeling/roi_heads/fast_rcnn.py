@@ -1,6 +1,6 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+# Copyright (c) Facebook, Inc. and its affiliates.
 import logging
-from typing import Dict, Union
+from typing import Dict, List, Tuple, Union
 import torch
 from fvcore.nn import giou_loss, smooth_l1_loss
 from torch import nn
@@ -43,7 +43,14 @@ Naming convention:
 """
 
 
-def fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image):
+def fast_rcnn_inference(
+    boxes: List[torch.Tensor],
+    scores: List[torch.Tensor],
+    image_shapes: List[Tuple[int, int]],
+    score_thresh: float,
+    nms_thresh: float,
+    topk_per_image: int,
+):
     """
     Call `fast_rcnn_inference_single_image` for all images.
 
@@ -79,7 +86,12 @@ def fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, t
 
 
 def fast_rcnn_inference_single_image(
-    boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image
+    boxes,
+    scores,
+    image_shape: Tuple[int, int],
+    score_thresh: float,
+    nms_thresh: float,
+    topk_per_image: int,
 ):
     """
     Single-image inference. Return bounding-box detection results by thresholding
@@ -184,11 +196,19 @@ class FastRCNNOutputs:
                 not self.proposals.tensor.requires_grad
             ), "Proposals should not require gradients!"
 
-            # The following fields should exist only when training.
-            if proposals[0].has("gt_boxes"):
-                self.gt_boxes = box_type.cat([p.gt_boxes for p in proposals])
-                assert proposals[0].has("gt_classes")
+            # "gt_classes" exists if and only if training. But other gt fields may
+            # not necessarily exist in training for images that have no groundtruth.
+            if proposals[0].has("gt_classes"):
                 self.gt_classes = cat([p.gt_classes for p in proposals], dim=0)
+
+                # If "gt_boxes" does not exist, the proposals must be all negative and
+                # should not be included in regression loss computation.
+                # Here we just use proposal_boxes as an arbitrary placeholder because its
+                # value won't be used in self.box_reg_loss().
+                gt_boxes = [
+                    p.gt_boxes if p.has("gt_boxes") else p.proposal_boxes for p in proposals
+                ]
+                self.gt_boxes = box_type.cat(gt_boxes)
         else:
             self.proposals = Boxes(torch.zeros(0, 4, device=self.pred_proposal_deltas.device))
         self._no_instances = len(self.proposals) == 0  # no instances found
@@ -240,7 +260,7 @@ class FastRCNNOutputs:
         if self._no_instances:
             return 0.0 * self.pred_proposal_deltas.sum()
 
-        box_dim = self.gt_boxes.tensor.size(1)  # 4 or 5
+        box_dim = self.proposals.tensor.size(1)  # 4 or 5
         cls_agnostic_bbox_reg = self.pred_proposal_deltas.size(1) == box_dim
         device = self.pred_proposal_deltas.device
 
@@ -391,6 +411,7 @@ class FastRCNNOutputLayers(nn.Module):
         super().__init__()
         if isinstance(input_shape, int):  # some backward compatibility
             input_shape = ShapeSpec(channels=input_shape)
+        self.num_classes = num_classes
         input_size = input_shape.channels * (input_shape.width or 1) * (input_shape.height or 1)
         # prediction layer for num_classes foreground classes and one background class (hence + 1)
         self.cls_score = Linear(input_size, num_classes + 1)
@@ -472,7 +493,7 @@ class FastRCNNOutputLayers(nn.Module):
         ).losses()
         return {k: v * self.loss_weight.get(k, 1.0) for k, v in losses.items()}
 
-    def inference(self, predictions, proposals):
+    def inference(self, predictions: Tuple[torch.Tensor, torch.Tensor], proposals: List[Instances]):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -515,7 +536,7 @@ class FastRCNNOutputLayers(nn.Module):
         proposal_boxes = proposal_boxes[0].cat(proposal_boxes).tensor
         N, B = proposal_boxes.shape
         predict_boxes = self.box2box_transform.apply_deltas(
-            proposal_deltas.float(), proposal_boxes
+            proposal_deltas, proposal_boxes
         )  # Nx(KxB)
 
         K = predict_boxes.shape[1] // B
@@ -531,7 +552,9 @@ class FastRCNNOutputLayers(nn.Module):
         num_prop_per_image = [len(p) for p in proposals]
         return predict_boxes.split(num_prop_per_image)
 
-    def predict_boxes(self, predictions, proposals):
+    def predict_boxes(
+        self, predictions: Tuple[torch.Tensor, torch.Tensor], proposals: List[Instances]
+    ):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -552,12 +575,14 @@ class FastRCNNOutputLayers(nn.Module):
         proposal_boxes = proposal_boxes[0].cat(proposal_boxes).tensor
         predict_boxes = self.box2box_transform.apply_deltas(
             # ensure fp32 for decoding precision
-            proposal_deltas.float(),
+            proposal_deltas,
             proposal_boxes,
         )  # Nx(KxB)
         return predict_boxes.split(num_prop_per_image)
 
-    def predict_probs(self, predictions, proposals):
+    def predict_probs(
+        self, predictions: Tuple[torch.Tensor, torch.Tensor], proposals: List[Instances]
+    ):
         """
         Args:
             predictions: return values of :meth:`forward()`.

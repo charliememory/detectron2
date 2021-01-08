@@ -203,6 +203,10 @@ unavailable to you:
 * `stuff_colors` (list[tuple(r, g, b)]): Pre-defined color (in [0, 255]) for each stuff category.
   Used for visualization. If not given, random colors are used.
 
+* `ignore_label` (int): Used by semantic and panoptic segmentation tasks. Pixels in ground-truth
+  annotations with this category label should be ignored in evaluation. Typically these are "unlabeled"
+  pixels.
+
 * `keypoint_names` (list[str]): Used by keypoint detection. A list of names for each keypoint.
 
 * `keypoint_flip_map` (list[tuple[str]]): Used by keypoint detection. A list of pairs of names,
@@ -265,6 +269,8 @@ There are other configs you might want to change to train or evaluate on new dat
   You'll also need to set [Keypoint OKS](http://cocodataset.org/#keypoints-eval)
   with `TEST.KEYPOINT_OKS_SIGMAS` for evaluation.
 * `MODEL.SEM_SEG_HEAD.NUM_CLASSES` sets the number of stuff classes for Semantic FPN & Panoptic FPN.
+* `TEST.DETECTIONS_PER_IMAGE` controls the maximum number of objects to be detected.
+  Set it to a larger number if test images may contain >100 objects.
 * If you're training Fast R-CNN (with precomputed proposals), `DATASETS.PROPOSAL_FILES_{TRAIN,TEST}`
   need to match the datasets. The format of proposal files are documented
   [here](../modules/data.html#detectron2.data.load_proposals_into_dataset).

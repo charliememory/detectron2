@@ -1,12 +1,22 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+# Copyright (c) Facebook, Inc. and its affiliates.
 import math
 import numpy as np
 from enum import IntEnum, unique
-from typing import Any, List, Tuple, Union
+from typing import List, Tuple, Union
 import torch
 from torch import device
 
+from detectron2.utils.env import TORCH_VERSION
+
 _RawBoxType = Union[List[float], Tuple[float, ...], torch.Tensor, np.ndarray]
+
+
+if TORCH_VERSION < (1, 8):
+    _maybe_jit_unused = torch.jit.unused
+else:
+
+    def _maybe_jit_unused(x):
+        return x
 
 
 @unique
@@ -152,7 +162,7 @@ class Boxes:
         if tensor.numel() == 0:
             # Use reshape, so we don't end up creating a new tensor that does not depend on
             # the inputs (and consequently confuses jit)
-            tensor = tensor.reshape((0, 4)).to(dtype=torch.float32, device=device)
+            tensor = tensor.reshape((-1, 4)).to(dtype=torch.float32, device=device)
         assert tensor.dim() == 2 and tensor.size(-1) == 4, tensor.size()
 
         self.tensor = tensor
@@ -166,9 +176,10 @@ class Boxes:
         """
         return Boxes(self.tensor.clone())
 
-    @torch.jit.unused
-    def to(self, *args: Any, **kwargs: Any):
-        return Boxes(self.tensor.to(*args, **kwargs))
+    @_maybe_jit_unused
+    def to(self, device: torch.device):
+        # Boxes are assumed float32 and does not support to(dtype)
+        return Boxes(self.tensor.to(device=device))
 
     def area(self) -> torch.Tensor:
         """
@@ -212,7 +223,7 @@ class Boxes:
         keep = (widths > threshold) & (heights > threshold)
         return keep
 
-    def __getitem__(self, item):
+    def __getitem__(self, item) -> "Boxes":
         """
         Args:
             item: int, slice, or a BoolTensor

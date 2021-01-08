@@ -1,5 +1,5 @@
 #!/bin/bash -e
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
+# Copyright (c) Facebook, Inc. and its affiliates.
 
 [[ -d "dev/packaging" ]] || {
   echo "Please run this script at detectron2 root!"
@@ -46,6 +46,12 @@ EOF
 if [[ -n "$1" ]] && [[ -n "$2" ]]; then
   build_one "$1" "$2"
 else
+  build_one cu110 1.7
+  build_one cu102 1.7
+  build_one cu101 1.7
+  build_one cu92 1.7
+  build_one cpu 1.7
+
   build_one cu102 1.6
   build_one cu101 1.6
   build_one cu92 1.6
