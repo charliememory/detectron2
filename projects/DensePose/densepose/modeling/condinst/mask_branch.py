@@ -196,6 +196,72 @@ class eca_layer(nn.Module):
 
         return x * y.expand_as(x)
 
+class ASFF(nn.Module):
+    def __init__(self, level, norm, dims=[512, 256, 256], rfb=False):
+        super(ASFF, self).__init__()
+        conv_bn_relu = conv_with_kaiming_uniform(norm, activation=True)
+        self.level = level
+        # 输入的三个特征层的channels, 根据实际修改
+        self.dim = dims
+        self.inter_dim = self.dim[self.level]
+        # 每个层级三者输出通道数需要一致
+        if level==0:
+            self.stride_level_1 = conv_bn_relu(self.dim[1], self.inter_dim, 3, 2)
+            self.stride_level_2 = conv_bn_relu(self.dim[2], self.inter_dim, 3, 2)
+            self.expand = conv_bn_relu(self.inter_dim, 1024, 3, 1)
+        elif level==1:
+            self.compress_level_0 = conv_bn_relu(self.dim[0], self.inter_dim, 1, 1)
+            self.stride_level_2 = conv_bn_relu(self.dim[2], self.inter_dim, 3, 2)
+            self.expand = conv_bn_relu(self.inter_dim, 512, 3, 1)
+        elif level==2:
+            self.compress_level_0 = conv_bn_relu(self.dim[0], self.inter_dim, 1, 1)
+            if self.dim[1] != self.dim[2]:
+                self.compress_level_1 = conv_bn_relu(self.dim[1], self.inter_dim, 1, 1)
+            self.expand = add_conv(self.inter_dim, 256, 3, 1)
+        compress_c = 8 if rfb else 16  
+        self.weight_level_0 = conv_bn_relu(self.inter_dim, compress_c, 1, 1)
+        self.weight_level_1 = conv_bn_relu(self.inter_dim, compress_c, 1, 1)
+        self.weight_level_2 = conv_bn_relu(self.inter_dim, compress_c, 1, 1)
+
+        self.weight_levels = nn.Conv2d(compress_c*3, 3, 1, 1, 0)
+
+  # 尺度大小 level_0 < level_1 < level_2
+    def forward(self, x_level_0, x_level_1, x_level_2):
+        # Feature Resizing过程
+        if self.level==0:
+            level_0_resized = x_level_0
+            level_1_resized = self.stride_level_1(x_level_1)
+            level_2_downsampled_inter =F.max_pool2d(x_level_2, 3, stride=2, padding=1)
+            level_2_resized = self.stride_level_2(level_2_downsampled_inter)
+        elif self.level==1:
+            level_0_compressed = self.compress_level_0(x_level_0)
+            level_0_resized =F.interpolate(level_0_compressed, 2, mode='nearest')
+            level_1_resized =x_level_1
+            level_2_resized =self.stride_level_2(x_level_2)
+        elif self.level==2:
+            level_0_compressed = self.compress_level_0(x_level_0)
+            level_0_resized =F.interpolate(level_0_compressed, 4, mode='nearest')
+            if self.dim[1] != self.dim[2]:
+                level_1_compressed = self.compress_level_1(x_level_1)
+                level_1_resized = F.interpolate(level_1_compressed, 2, mode='nearest')
+            else:
+                level_1_resized =F.interpolate(x_level_1, 2, mode='nearest')
+            level_2_resized =x_level_2
+    # 融合权重也是来自于网络学习
+        level_0_weight_v = self.weight_level_0(level_0_resized)
+        level_1_weight_v = self.weight_level_1(level_1_resized)
+        level_2_weight_v = self.weight_level_2(level_2_resized)
+        levels_weight_v = torch.cat((level_0_weight_v, level_1_weight_v,
+                                     level_2_weight_v),1)
+        levels_weight = self.weight_levels(levels_weight_v)
+        levels_weight = F.softmax(levels_weight, dim=1)   # alpha产生
+    # 自适应融合
+        fused_out_reduced = level_0_resized * levels_weight[:,0:1,:,:]+\
+                            level_1_resized * levels_weight[:,1:2,:,:]+\
+                            level_2_resized * levels_weight[:,2:,:,:]
+
+        out = self.expand(fused_out_reduced)
+        return out
 
 # from cvpods.layers import TreeFilterV2
 # class TreeFilterV2_layer(nn.Module):
@@ -290,6 +356,8 @@ class MaskBranch(nn.Module):
         self.use_aspp = cfg.MODEL.CONDINST.MASK_BRANCH.USE_ASPP
         self.use_san = cfg.MODEL.CONDINST.MASK_BRANCH.USE_SAN
         self.san_type = cfg.MODEL.CONDINST.SAN_TYPE
+        self.use_attn = cfg.MODEL.CONDINST.MASK_BRANCH.USE_ATTN
+        self.attn_type = cfg.MODEL.CONDINST.ATTN_TYPE
         # lambda_layer_r = cfg.MODEL.CONDINST.MASK_BRANCH.LAMBDA_LAYER_R
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         self.v2 = cfg.MODEL.CONDINST.v2
@@ -335,7 +403,13 @@ class MaskBranch(nn.Module):
             #     )
             #     self.refine.append(layer)
             # else:
-            if self.v2 and idx>0 and in_feature not in ["p6","p7"]:
+
+            # pdb.set_trace()
+            # self.ASFF = ASFF(level=2, norm=norm, dims=[256, 256, 256], rfb=False)
+            # self.ASFF(x_level_0, x_level_1, x_level_2):
+
+            # if self.v2 and idx>0 and in_feature not in ["p6","p7"]:
+            if idx>0 and in_feature not in ["p6","p7"]:
                 if self.add_skeleton_feat:
                     self.refine.append(nn.Sequential(*[
                         conv_block_no_act(
@@ -404,30 +478,79 @@ class MaskBranch(nn.Module):
                 san_func = SAN_BottleneckGN_GatedEarly
             elif self.san_type=="SAN_BottleneckGN_Gated":
                 SAN_BottleneckGN_Gated
-            self.san_blk_1 = san_func(sa_type, agg_channels, agg_channels // 16, agg_channels // 4, agg_channels, 8, kernel_size=7, stride=1)
-            
+            self.san_blks = []
+            for idx in range(len(self.in_features)):
+                san_blk = san_func(sa_type, agg_channels, agg_channels // 16, agg_channels // 4, agg_channels, 8, kernel_size=7, stride=1)
+                self.add_module("san_blk_{}".format(idx), san_blk)
+                self.san_blks.append(san_blk)
+
+        if self.use_attn:
+            ks = 7
+            if self.attn_type=="Spatial_Attn": # SpatialMaxAvg_Attn, SpatialMaxAvg_ChannelMaxAvg_Attn
+                ch_in = sum([feature_channels[k] for k in self.in_features])
+                ch_out = len(self.in_features)
+                self.attn_blk = nn.Sequential(*[
+                            nn.Conv2d(ch_in, ch_out, kernel_size=ks, stride=1, padding=ks//2, bias=False),
+                            nn.Softmax(dim=1)
+                        ])
+            elif self.attn_type=="SpatialMaxAvg_Attn":
+                ch_in = len(self.in_features) * 2
+                ch_out = len(self.in_features)
+                self.attn_blk = nn.Sequential(*[
+                            nn.Conv2d(ch_in, ch_out, kernel_size=ks, stride=1, padding=ks//2, bias=False),
+                            nn.Softmax(dim=1)
+                        ])
+            elif self.attn_type=="SpatialMaxAvg_ChannelMaxAvg_Attn":
+                ch_in = len(self.in_features) * 2
+                ch_out = len(self.in_features)
+                self.attn_blk = nn.Sequential(*[
+                            nn.Conv2d(ch_in, ch_out, kernel_size=ks, stride=1, padding=ks//2, bias=False),
+                            nn.Softmax(dim=1)
+                        ])
+                "todo channel attn"
+                self.ch_attn_max_list = []
+                self.ch_attn_avg_list = []
+                reduct_ratio = 16
+                for idx,key in enumerate(self.in_features):
+                    ch_attn_max = nn.Sequential(*[
+                            nn.Linear(feature_channels[key], feature_channels[key]//16),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(feature_channels[key]//16, feature_channels[key]),
+                        ])
+                    self.add_module("ch_attn_max_{}".format(idx), ch_attn_max)
+                    self.ch_attn_max_list.append(ch_attn_max)
+                    #
+                    ch_attn_avg = nn.Sequential(*[
+                            nn.Linear(feature_channels[key], feature_channels[key]//16),
+                            nn.ReLU(inplace=True),
+                            nn.Linear(feature_channels[key]//16, feature_channels[key]),
+                        ])
+                    self.add_module("ch_attn_avg_{}".format(idx), ch_attn_avg)
+                    self.ch_attn_avg_list.append(ch_attn_avg)
+
+
             # agg_channels = channels
         # if "p1" == self.in_features[0]:
         #     self.down_conv = conv_block(
         #         channels, channels, 3, 2, 1
         #     )
         if "p2" == self.in_features[0]:
-            if self.v2:
+            # if self.v2:
                 # if self.add_skeleton_feat:
                 #     tower = [conv_block(
                 #             agg_channels+55, channels, 3, 2, 1
                 #         )]
                 # else:
-                tower = [conv_block(
-                        agg_channels, channels, 3, 2, 1
-                    )]
-            else:
-                self.down_conv = conv_block(
+            tower = [conv_block(
                     agg_channels, channels, 3, 2, 1
-                )
-                tower = [conv_block(
-                        channels, channels, 3, 1
-                    )]
+                )]
+            # else:
+            #     self.down_conv = conv_block(
+            #         agg_channels, channels, 3, 2, 1
+            #     )
+            #     tower = [conv_block(
+            #             channels, channels, 3, 1
+            #         )]
         else:
             tower = [conv_block(
                     agg_channels, channels, 3, 1
@@ -489,32 +612,52 @@ class MaskBranch(nn.Module):
         #     # pdb.set_trace()
         #     x = self.decoder(features)
         # else:
-        for i, f in enumerate(self.in_features):
-            if i == 0:
-                x = self.refine[i](features[f])
-            else:
-                if self.v2:
-                    # if self.checkpoint_grad_num>0:
-                    #     modules = [module for k, module in self.refine[i]._modules.items()]
-                    #     x_p = checkpoint.checkpoint_sequential(modules,1,features[f])
-                    # else:
+        if self.use_attn:
+            feat_list = []
 
-                    # if self.use_tree_filter:
-                    #     # pdb.set_trace()
-                    #     x_p = self.tf[i-1](features[self.in_features[i]], features[self.in_features[i-1]])
-                    #     x_p = self.refine[i](x_p)
-                    # else:
-                    x_p = self.refine[i](features[f])
+        for i, f in enumerate(self.in_features):
+            feat = features[f]
+
+            if self.use_san:
+                feat = self.san_blks[i](feat)
+            # else:
+            feat = self.refine[i](feat)
+
+            if self.use_attn:
+                feat_list.append(feat)
+            else:
+                if i == 0:
+                    x = feat
                 else:
-                    x_p = self.refine[i](features[f])
-                    target_h, target_w = x.size()[2:]
-                    h, w = x_p.size()[2:]
-                    assert target_h % h == 0
-                    assert target_w % w == 0
-                    factor_h, factor_w = target_h // h, target_w // w
-                    assert factor_h == factor_w
-                    x_p = aligned_bilinear(x_p, factor_h)
-                x = x + x_p
+                    x_p = feat
+                    x = x + x_p
+
+
+        if self.use_attn:
+            if self.attn_type=="Spatial_Attn": 
+                attn_maps = self.attn_blk(torch.cat(feat_list, dim=1))
+                attn_map_list = torch.chunk(attn_maps, len(feat_list), dim=1)
+                feat = [feat*attn_map for feat,attn_map in zip(feat_list,attn_map_list)]
+                x = torch.stack(feat, dim=0).sum(dim=0)
+            elif self.attn_type=="SpatialMaxAvg_Attn":
+                attn_feat_list = [torch.cat([f.max(dim=1,keepdim=True)[0],f.mean(dim=1,keepdim=True)], dim=1) for f in feat_list]
+                attn_maps = self.attn_blk(torch.cat(attn_feat_list, dim=1))
+                attn_map_list = torch.chunk(attn_maps, len(feat_list), dim=1)
+                feat = [feat*attn_map for feat,attn_map in zip(feat_list,attn_map_list)]
+                x = torch.stack(feat, dim=0).sum(dim=0)
+            elif self.attn_type=="SpatialMaxAvg_ChannelMaxAvg_Attn":
+                for idx in range(len(feat_list)):
+                    feat = feat_list[idx]
+                    attn_vec = self.ch_attn_max_list[idx](feat.max(dim=-1)[0].max(dim=-1)[0]) \
+                                   + self.ch_attn_avg_list[idx](feat.mean(dim=[2,3]))
+                    feat_list[idx] = feat_list[idx] * attn_vec.unsqueeze(dim=-1).unsqueeze(dim=-1)
+
+                attn_feat_list = [torch.cat([f.max(dim=1,keepdim=True)[0],f.mean(dim=1,keepdim=True)], dim=1) for f in feat_list]
+                attn_maps = self.attn_blk(torch.cat(attn_feat_list, dim=1))
+                attn_map_list = torch.chunk(attn_maps, len(feat_list), dim=1)
+                feat = [feat*attn_map for feat,attn_map in zip(feat_list,attn_map_list)]
+                x = torch.stack(feat, dim=0).sum(dim=0)
+
         if self.add_skeleton_feat:
             # pdb.set_trace()
             x = self.conv_skeleton(torch.cat([x,skeleton_feats], dim=1))
@@ -528,15 +671,13 @@ class MaskBranch(nn.Module):
         #     x = self.lambda_layer(x)
         if self.use_eca:
             x = self.eca(x)
-        if self.use_san:
-            x = self.san_blk_1(x)
         agg_feats = x
         # if "p1" == self.in_features[0]:
         #     mask_feats = self.tower(self.down_conv(x))
 
-        if not self.v2:
-            if "p2" == self.in_features[0]:
-                x = self.down_conv(x)
+        # if not self.v2:
+        #     if "p2" == self.in_features[0]:
+        #         x = self.down_conv(x)
         
         # if self.checkpoint_grad_num>0:
         #     # mask_feats = checkpoint.checkpoint(self.custom(self.tower), x)

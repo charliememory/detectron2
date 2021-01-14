@@ -4,11 +4,12 @@
 import argparse
 import glob
 import logging
-import os, pdb, tqdm
+import os, pdb, tqdm, copy
 import pickle
 import sys
 from typing import Any, ClassVar, Dict, List
 import torch
+import torch.nn.functional as F
 
 from detectron2.config import CfgNode
 from detectron2.data.detection_utils import read_image
@@ -49,6 +50,7 @@ logger = logging.getLogger(LOGGER_NAME)
 
 _ACTION_REGISTRY: Dict[str, "Action"] = {}
 
+## MLQ added
 
 class Action(object):
     @classmethod
@@ -101,13 +103,86 @@ class InferenceAction(Action):
         # context = cls.create_context(args)
         context = cls.create_context(args, cfg)
         smooth_radius = cfg.MODEL.INFERENCE_SMOOTH_FRAME_NUM
-        # cnt = 0
+
+        # # pdb.set_trace()
+        # if smooth_radius>0:
+        #     # weight_dic = {-2:0.2, -1:0.2, 0: 0.2, 1:0.2, 2:0.2}
+        #     # weight_dic = [0.1,0.2,0.4,0.2,0.1]
+        #     flow_model = flow_model_wrapper(predictor.model.device)
+        #     # self.flow_model.eval()
+
+        #     img_queue = []
+        #     dp_output_queue = []
+
+        #     # cnt = 0
+        #     for fid in tqdm.tqdm(range(len(file_list))):
+        #         file_name = file_list[fid]
+        #         if img_queue==[]:
+        #             for i in range(-smooth_radius, smooth_radius+1):
+        #                 ii = min(len(file_list)-1, max(0,fid+i))
+        #                 img = read_image(file_list[ii], format="BGR")
+        #                 img_queue.append(img.copy())
+        #                 with torch.no_grad():
+        #                     outputs = predictor(img)["instances"]
+        #                 # if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
+        #                 #     outputs = cls.seperate_global_siuv(outputs)
+        #                 dp_output_queue.append(outputs)
+        #         else:
+        #             img_queue.pop(0)
+        #             dp_output_queue.pop(0)
+        #             ii = min(len(file_list)-1, fid+smooth_radius)
+        #             img = read_image(file_list[ii], format="BGR")
+        #             img_queue.append(img.copy())
+        #             with torch.no_grad():
+        #                 outputs = predictor(img)["instances"]
+        #             dp_output_queue.append(outputs)
+
+        #         center_idx = len(img_queue)//2
+        #         dp_output_warp = copy.copy(dp_output_queue[center_idx])
+        #         for i in range(len(img_queue)):
+        #             if i == center_idx:
+        #                 continue
+        #             else:
+        #                 pdb.set_trace()
+        #                 img_tgt = torch.tensor(img_queue[center_idx]).permute([2,0,1])[None,...].float()
+        #                 img_ref = torch.tensor(img_queue[i]).permute([2,0,1])[None,...].float()
+        #                 flow_fw = flow_model.pred_flow(img_tgt, img_ref)
+        #                 dp = copy.copy(dp_output_queue[i])
+        #                 "TODO, warp siuv"
+        #                 dp_output_warp.pred_densepose.fine_segm += flow_model.tensor_warp_via_flow(dp.pred_densepose.fine_segm, flow_fw)
+        #                 dp_output_warp.pred_densepose.u += flow_model.tensor_warp_via_flow(dp.pred_densepose.u, flow_fw)
+        #                 dp_output_warp.pred_densepose.v += flow_model.tensor_warp_via_flow(dp.pred_densepose.v, flow_fw)
+        #         dp_output_warp.pred_densepose.fine_segm /= len(img_queue)
+        #         dp_output_warp.pred_densepose.u /= len(img_queue)
+        #         dp_output_warp.pred_densepose.v /= len(img_queue)
+        #         pdb.set_trace()
+        #         if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
+        #             dp_output_warp = cls.seperate_global_siuv(dp_output_warp)
+        #         # # cnt += 1
+        #         # # if cnt<50:
+        #         # #     continue
+        #         # # pdb.set_trace()
+        #         # # if smooth_radius>0:
+        #         # img = read_image(file_name, format="BGR")  # predictor expects BGR image.
+        #         # image_adj_list = []
+        #         # for i in range(-smooth_radius, smooth_radius+1):
+        #         #     if i==0:
+        #         #         continue
+        #         #     ii = min(len(file_list)-1, max(0,fid+i))
+        #         #     image_adj_list.append(read_image(file_list[ii], format="BGR"))
+        #         # with torch.no_grad():
+        #         #     outputs = predictor(img, image_adj_list)["instances"]
+
+        #         # if cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV:
+        #         #     outputs = cls.seperate_global_siuv(outputs)
+
+        #         cls.execute_on_outputs(context, {"file_name": file_name, "image": img}, dp_output_warp)
+                    
+        #         torch.cuda.empty_cache()
+        # else:
         for fid in tqdm.tqdm(range(len(file_list))):
             file_name = file_list[fid]
-            # cnt += 1
-            # if cnt<50:
-            #     continue
-            # pdb.set_trace()
+
             if smooth_radius>0:
                 img = read_image(file_name, format="BGR")  # predictor expects BGR image.
                 image_adj_list = []
@@ -144,6 +219,9 @@ class InferenceAction(Action):
     def seperate_global_siuv(cls: type, outputs: Instances):
         "TODO"
         N_ins = outputs.pred_boxes.tensor.shape[0]
+        if N_ins==0:
+            return outputs
+        # pdb.set_trace()
         assert N_ins==outputs.pred_densepose.coarse_segm.shape[0]
         device = outputs.pred_boxes.tensor.device
         H, W = outputs.image_size
@@ -153,6 +231,73 @@ class InferenceAction(Action):
         outputs.pred_densepose.u = outputs.pred_densepose.u.repeat(N_ins, 1, 1, 1)
         outputs.pred_densepose.v = outputs.pred_densepose.v.repeat(N_ins, 1, 1, 1)
         return outputs
+
+    # ## MLQ added
+    # def create_and_load_netFlow(self, device):
+    #     # parser.add_argument('--model', help="restore checkpoint")
+    #     # parser.add_argument('--seq_img_dir', help="sequence images for evaluation")
+    #     # parser.add_argument('--backward_flow', action='store_true', help='calculate flow from i+1 to i')
+    #     # parser.add_argument('--small', action='store_true', help='use small model')
+    #     # parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    #     # parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
+    #     # args = parser.parse_args()
+    #     class Args:
+    #         def __init__(self):
+    #             # self.model = "./RAFT/models/raft-sintel.pth"
+    #             # self.small = False
+    #             # self.mixed_precision = False
+    #             # self.dropout = 0
+    #             # self.alternate_corr = False
+    #             self.model = "./RAFT/models/raft-small.pth"
+    #             self.small = True
+    #             self.mixed_precision = False
+    #             self.dropout = 0
+    #             self.alternate_corr = False
+    #     args = Args()
+
+    #     # netFlow = RAFT(args)
+    #     netFlow = torch.nn.DataParallel(RAFT(args))
+    #     netFlow.load_state_dict(torch.load(args.model, map_location=device))
+    #     print("Create and load netFlow successfully")
+    #     return netFlow
+
+    # def pred_flow(self, model, img0, img1, iters=20):
+    #     try:
+    #         assert img0.min()>=0 and img0.max()>=10 and img0.max()<=255, "input image range should be [0,255], but got [{},{}]".format(img0.min(),img0.max())
+    #     except:
+    #         print("input image range should be [0,255], but got [{},{}]".format(img0.min(),img0.max()))
+    #         raise ValueError
+
+    #     padder = InputPadder(img0.shape, mode='sintel')
+    #     img0, img1 = padder.pad(img0, img1)
+
+    #     flow_low, flow_pr = model(img0, img1, iters, test_mode=True)
+    #     flow = padder.unpad(flow_pr)
+    #     return flow
+
+    # def tensor_warp_via_flow(self, tensor, flow):
+    #     b, _, h, w = tensor.shape
+    #     coords = self.flow2coord(flow).permute([0,2,3,1]) # [0,h-1], [0,w-1]
+    #     tensor = F.grid_sample(tensor, coords) #, mode='bilinear', align_corners=True)
+    #     return tensor
+
+    # def flow2coord(self, flow):
+    #     def meshgrid(height, width):
+    #         x_t = torch.matmul(
+    #             torch.ones(height, 1), torch.linspace(-1.0, 1.0, width).view(1, width))
+    #         y_t = torch.matmul(
+    #             torch.linspace(-1.0, 1.0, height).view(height, 1), torch.ones(1, width))
+
+    #         grid_x = x_t.view(1, 1, height, width)
+    #         grid_y = y_t.view(1, 1, height, width)
+    #         return grid_x, grid_y
+    #         # return torch.cat([grid_x,grid_y], dim=-1)
+
+    #     b, _, h, w = flow.shape
+    #     grid_x, grid_y = meshgrid(h, w)
+    #     coord_x = flow[:,0:1]/w + grid_x.to(flow.device)
+    #     coord_y = flow[:,1:2]/h + grid_y.to(flow.device)
+    #     return torch.cat([coord_x,coord_y], dim=1)
 
     # @classmethod
     # def execute(cls: type, args: argparse.Namespace, multi_frames=True):
@@ -363,6 +508,11 @@ class ShowAction(InferenceAction):
             default="outputres.png",
             help="File name to save output to",
         )
+        parser.add_argument(
+            "--vis_rgb_img",
+            action='store_true',
+            help="Wheather visualize rgb image instead of gray (default)",
+        )
 
     @classmethod
     def setup_config(
@@ -387,14 +537,19 @@ class ShowAction(InferenceAction):
         extractor = context["extractor"]
         image_fpath = entry["file_name"]
         logger.info(f"Processing {image_fpath}")
-        image = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2GRAY)
-        image = np.tile(image[:, :, np.newaxis], [1, 1, 3])
+        if context["vis_rgb_img"]:
+            image = entry["image"]
+            # pdb.set_trace()
+        else:
+            image = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2GRAY)
+            image = np.tile(image[:, :, np.newaxis], [1, 1, 3])
         # pdb.set_trace()
         data = extractor(outputs)
         # pdb.set_trace()
         image_vis = visualizer.visualize(image, data)
         entry_idx = context["entry_idx"] + 1
-        out_fname = cls._get_out_fname(entry_idx, context["out_fname"])
+        # out_fname = cls._get_out_fname(entry_idx, context["out_fname"])
+        out_fname = os.path.join(context["out_fname"], image_fpath.split('/')[-1])
         out_dir = os.path.dirname(out_fname)
         if len(out_dir) > 0 and not os.path.exists(out_dir):
             os.makedirs(out_dir)
@@ -434,6 +589,7 @@ class ShowAction(InferenceAction):
             "extractor": extractor,
             "visualizer": visualizer,
             "out_fname": args.output,
+            "vis_rgb_img": args.vis_rgb_img,
             "entry_idx": 0,
         }
         return context

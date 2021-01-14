@@ -6,7 +6,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
-import pdb
+import pdb, copy
 
 from detectron2.structures import ImageList, Boxes
 from detectron2.modeling.proposal_generator import build_proposal_generator
@@ -55,6 +55,96 @@ __all__ = ["CondInst"]
 
 
 logger = logging.getLogger(__name__)
+
+class InputPadder:
+    """ Pads images such that dimensions are divisible by 8 """
+    def __init__(self, dims, mode='sintel'):
+        self.ht, self.wd = dims[-2:]
+        pad_ht = (((self.ht // 8) + 1) * 8 - self.ht) % 8
+        pad_wd = (((self.wd // 8) + 1) * 8 - self.wd) % 8
+        if mode == 'sintel':
+            self._pad = [pad_wd//2, pad_wd - pad_wd//2, pad_ht//2, pad_ht - pad_ht//2]
+        else:
+            self._pad = [pad_wd//2, pad_wd - pad_wd//2, 0, pad_ht]
+
+    def pad(self, *inputs):
+        return [F.pad(x, self._pad, mode='replicate') for x in inputs]
+
+    def unpad(self,x):
+        ht, wd = x.shape[-2:]
+        c = [self._pad[2], ht-self._pad[3], self._pad[0], wd-self._pad[1]]
+        return x[..., c[0]:c[1], c[2]:c[3]]
+
+class flow_model_wrapper:
+    def __init__(self, device):
+    # def create_and_load_netFlow(self, device):
+        # parser.add_argument('--model', help="restore checkpoint")
+        # parser.add_argument('--seq_img_dir', help="sequence images for evaluation")
+        # parser.add_argument('--backward_flow', action='store_true', help='calculate flow from i+1 to i')
+        # parser.add_argument('--small', action='store_true', help='use small model')
+        # parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+        # parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
+        # args = parser.parse_args()
+        sys.path.append('./RAFT/core')
+        from raft import RAFT
+        class Args:
+            def __init__(self):
+                # self.model = "./RAFT/models/raft-sintel.pth"
+                # self.small = False
+                # self.mixed_precision = False
+                # self.dropout = 0
+                # self.alternate_corr = False
+                self.model = "./RAFT/models/raft-small.pth"
+                self.small = True
+                self.mixed_precision = False
+                self.dropout = 0
+                self.alternate_corr = False
+        args = Args()
+
+        # model = RAFT(args)
+        self.model = torch.nn.DataParallel(RAFT(args))
+        self.model.load_state_dict(torch.load(args.model, map_location=device))
+        self.model.eval()
+        print("Create and load model successfully")
+        # return model
+
+    def pred_flow(self, img0, img1, iters=20):
+        try:
+            assert img0.min()>=0 and img0.max()>=10 and img0.max()<=255, "input image range should be [0,255], but got [{},{}]".format(img0.min(),img0.max())
+        except:
+            print("input image range should be [0,255], but got [{},{}]".format(img0.min(),img0.max()))
+            raise ValueError
+
+        padder = InputPadder(img0.shape, mode='sintel')
+        img0, img1 = padder.pad(img0, img1)
+
+        flow_low, flow_pr = self.model(img0, img1, iters, test_mode=True)
+        flow = padder.unpad(flow_pr)
+        return flow
+
+    def tensor_warp_via_flow(self, tensor, flow):
+        b, _, h, w = tensor.shape
+        coords = self.flow2coord(flow).permute([0,2,3,1]) # [0,h-1], [0,w-1]
+        tensor = F.grid_sample(tensor, coords) #, mode='bilinear', align_corners=True)
+        return tensor
+
+    def flow2coord(self, flow):
+        def meshgrid(height, width):
+            x_t = torch.matmul(
+                torch.ones(height, 1), torch.linspace(-1.0, 1.0, width).view(1, width))
+            y_t = torch.matmul(
+                torch.linspace(-1.0, 1.0, height).view(height, 1), torch.ones(1, width))
+
+            grid_x = x_t.view(1, 1, height, width)
+            grid_y = y_t.view(1, 1, height, width)
+            return grid_x, grid_y
+            # return torch.cat([grid_x,grid_y], dim=-1)
+
+        b, _, h, w = flow.shape
+        grid_x, grid_y = meshgrid(h, w)
+        coord_x = flow[:,0:1]/w + grid_x.to(flow.device)
+        coord_y = flow[:,1:2]/h + grid_y.to(flow.device)
+        return torch.cat([coord_x,coord_y], dim=1)
 
 
 @META_ARCH_REGISTRY.register()
@@ -110,6 +200,7 @@ class CondInst(nn.Module):
         self.rand_flip = cfg.MODEL.CONDINST.RAND_FLIP
         self.rand_scale = cfg.MODEL.CONDINST.RAND_SCALE
         self.rand_scale_gap = cfg.MODEL.CONDINST.RAND_SCALE_GAP
+        self.infer_TTA_with_rand_flow = cfg.MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW
 
         # build top module
         in_channels = self.proposal_generator.in_channels_to_top_module
@@ -135,6 +226,8 @@ class CondInst(nn.Module):
 
         self.to(self.device)
 
+        self.sparsity_list = []
+
         # self.amp_enable =  cfg.SOLVER.AMP.ENABLED
         # if self.amp_enable:
         #     self = self.half()
@@ -150,10 +243,13 @@ class CondInst(nn.Module):
     def _init_raft(self, cfg):
         ## load raft flow model
         self.infer_smooth_frame_num = cfg.MODEL.INFERENCE_SMOOTH_FRAME_NUM
-        if self.infer_smooth_frame_num>0:
-            self.flow_model = self.create_and_load_netFlow()
-            self.flow_model.to(self.device)
-            self.flow_model.eval()
+        if self.infer_smooth_frame_num>0 or self.infer_TTA_with_rand_flow:
+            self.flow_model = flow_model_wrapper(self.device)
+            # self.create_and_load_netFlow()
+            # self.flow_model.to(self.device)
+            # self.flow_model.eval()
+            self.img_queue = []
+            self.dp_output_queue = []
 
     def _init_densepose_head(self, cfg):
         # fmt: off
@@ -207,86 +303,86 @@ class CondInst(nn.Module):
         # )
         # self.densepose_losses = build_densepose_losses(cfg)
 
-    def create_and_load_netFlow(self):
-        # parser.add_argument('--model', help="restore checkpoint")
-        # parser.add_argument('--seq_img_dir', help="sequence images for evaluation")
-        # parser.add_argument('--backward_flow', action='store_true', help='calculate flow from i+1 to i')
-        # parser.add_argument('--small', action='store_true', help='use small model')
-        # parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
-        # parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
-        # args = parser.parse_args()
-        class Args:
-            def __init__(self):
-                # self.model = "./RAFT/models/raft-sintel.pth"
-                # self.small = False
-                # self.mixed_precision = False
-                # self.dropout = 0
-                # self.alternate_corr = False
-                self.model = "./RAFT/models/raft-small.pth"
-                self.small = True
-                self.mixed_precision = False
-                self.dropout = 0
-                self.alternate_corr = False
-        args = Args()
+    # def create_and_load_netFlow(self):
+    #     # parser.add_argument('--model', help="restore checkpoint")
+    #     # parser.add_argument('--seq_img_dir', help="sequence images for evaluation")
+    #     # parser.add_argument('--backward_flow', action='store_true', help='calculate flow from i+1 to i')
+    #     # parser.add_argument('--small', action='store_true', help='use small model')
+    #     # parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
+    #     # parser.add_argument('--alternate_corr', action='store_true', help='use efficent correlation implementation')
+    #     # args = parser.parse_args()
+    #     class Args:
+    #         def __init__(self):
+    #             # self.model = "./RAFT/models/raft-sintel.pth"
+    #             # self.small = False
+    #             # self.mixed_precision = False
+    #             # self.dropout = 0
+    #             # self.alternate_corr = False
+    #             self.model = "./RAFT/models/raft-small.pth"
+    #             self.small = True
+    #             self.mixed_precision = False
+    #             self.dropout = 0
+    #             self.alternate_corr = False
+    #     args = Args()
 
-        # netFlow = RAFT(args)
-        netFlow = torch.nn.DataParallel(RAFT(args))
-        netFlow.load_state_dict(torch.load(args.model, map_location=self.device))
-        print("Create and load netFlow successfully")
-        return netFlow
+    #     # netFlow = RAFT(args)
+    #     netFlow = torch.nn.DataParallel(RAFT(args))
+    #     netFlow.load_state_dict(torch.load(args.model, map_location=self.device))
+    #     print("Create and load netFlow successfully")
+    #     return netFlow
 
-    "TODO"
-    def flow_based_iuvlogit_avg(self, inputs, outputs, frame_idxs):
-        # weight_dic = {-2:0.2, -1:0.2, 0: 0.2, 1:0.2, 2:0.2}
-        weight_dic = {-2:0.1, -1:0.2, 0: 0.4, 1:0.2, 2:0.1}
-        # weight_dic = {-2:0.1, -1:0.3, 0: 1.2, 1:0.3, 2:0.1}
-        # weight_dic = {-2:0., -1:0., 0: 1, 1:0., 2:0.}
-        w_sum = sum([v for k,v in weight_dic.items()])
-        weight_dic = {k:v/w_sum for k,v in weight_dic.items()} 
-        # print(weight_dic)
+    # "TODO"
+    # def flow_based_iuvlogit_avg(self, inputs, outputs, frame_idxs):
+    #     # weight_dic = {-2:0.2, -1:0.2, 0: 0.2, 1:0.2, 2:0.2}
+    #     weight_dic = {-2:0.1, -1:0.2, 0: 0.4, 1:0.2, 2:0.1}
+    #     # weight_dic = {-2:0.1, -1:0.3, 0: 1.2, 1:0.3, 2:0.1}
+    #     # weight_dic = {-2:0., -1:0., 0: 1, 1:0., 2:0.}
+    #     w_sum = sum([v for k,v in weight_dic.items()])
+    #     weight_dic = {k:v/w_sum for k,v in weight_dic.items()} 
+    #     # print(weight_dic)
 
-        # iuvlogit_list = [inputs[("iuv", "pred", fid)] for fid in frame_idxs]
-        # iuvlogit_avg = torch.stack(iuvlogit_list, dim=0).mean(dim=0)
+    #     # iuvlogit_list = [inputs[("iuv", "pred", fid)] for fid in frame_idxs]
+    #     # iuvlogit_avg = torch.stack(iuvlogit_list, dim=0).mean(dim=0)
 
-        assert self.opt.use_warped_input and self.opt.use_iuv_logit
+    #     assert self.opt.use_warped_input and self.opt.use_iuv_logit
 
-        ## warp input
-        color_tgt = inputs[("color", 0)]
-        boxes_tgt = inputs[("bbox", "pred", 0)]
-        mask_fw_list, mask_bw_list = [], []
-        iuvlogit_list, mask_list = [], []
-        flow_list, iuv_warp_list, s_warp_list = [], [], []
-        for fid in frame_idxs:
-            color_ref = inputs[("color", fid)]
-            iuv_ref = inputs[("iuv", "pred", fid)]
-            s_ref = inputs[("ins_mask", "pred", fid)]
-            # "TODO debug"
-            # pdb.set_trace()
-            ins_num = s_ref.shape[1]
-            s_ref_list = torch.chunk(s_ref, ins_num, dim=1)
-            s_ref_list = [s[:,0] for s in s_ref_list]
-            siuv_ref = torch.cat(s_ref_list + [iuv_ref], dim=1)
-            with torch.no_grad():
-                ## forward flow
-                if fid==0:
-                    # continue
-                    flow_fw = torch.zeros_like(flow_fw)
-                else:
-                    flow_fw = self.pred_flow(self.models["flow"], color_tgt*255, color_ref*255)
-                    siuv_ref = self.tensor_warp_via_flow(siuv_ref, flow_fw)
-                flow_list.append(flow_fw.detach().cpu())
-                s_warp_fw, iuv_warp_fw = siuv_ref[:,:-77], siuv_ref[:,-77:]
-                # inputs[("iuv", "pred", fid)] = iuv_warp_fw
-                iuv_warp_list.append(iuv_warp_fw)
-                s_warp_list.append(s_warp_fw)
-        # pdb.set_trace()
-        # iuvlogit_list = [inputs[("iuv", "pred", fid)]*weight_dic[fid] for fid in frame_idxs]
-        # iuvlogit_list = [inputs[("iuv", "pred", fid)]*weight_dic[fid] for fid in frame_idxs]
-        # pdb.set_trace()
-        iuvlogit_list = [iuv_warp_list[i]*weight_dic[fid] for i,fid in enumerate(frame_idxs)]
-        iuvlogit_avg = torch.stack(iuvlogit_list, dim=0).sum(dim=0)
-        outputs[("flow", "list_list")].append(flow_list)
-        return inputs, outputs, iuv_warp_list, iuvlogit_avg
+    #     ## warp input
+    #     color_tgt = inputs[("color", 0)]
+    #     boxes_tgt = inputs[("bbox", "pred", 0)]
+    #     mask_fw_list, mask_bw_list = [], []
+    #     iuvlogit_list, mask_list = [], []
+    #     flow_list, iuv_warp_list, s_warp_list = [], [], []
+    #     for fid in frame_idxs:
+    #         color_ref = inputs[("color", fid)]
+    #         iuv_ref = inputs[("iuv", "pred", fid)]
+    #         s_ref = inputs[("ins_mask", "pred", fid)]
+    #         # "TODO debug"
+    #         # pdb.set_trace()
+    #         ins_num = s_ref.shape[1]
+    #         s_ref_list = torch.chunk(s_ref, ins_num, dim=1)
+    #         s_ref_list = [s[:,0] for s in s_ref_list]
+    #         siuv_ref = torch.cat(s_ref_list + [iuv_ref], dim=1)
+    #         with torch.no_grad():
+    #             ## forward flow
+    #             if fid==0:
+    #                 # continue
+    #                 flow_fw = torch.zeros_like(flow_fw)
+    #             else:
+    #                 flow_fw = self.pred_flow(self.models["flow"], color_tgt*255, color_ref*255)
+    #                 siuv_ref = self.tensor_warp_via_flow(siuv_ref, flow_fw)
+    #             flow_list.append(flow_fw.detach().cpu())
+    #             s_warp_fw, iuv_warp_fw = siuv_ref[:,:-77], siuv_ref[:,-77:]
+    #             # inputs[("iuv", "pred", fid)] = iuv_warp_fw
+    #             iuv_warp_list.append(iuv_warp_fw)
+    #             s_warp_list.append(s_warp_fw)
+    #     # pdb.set_trace()
+    #     # iuvlogit_list = [inputs[("iuv", "pred", fid)]*weight_dic[fid] for fid in frame_idxs]
+    #     # iuvlogit_list = [inputs[("iuv", "pred", fid)]*weight_dic[fid] for fid in frame_idxs]
+    #     # pdb.set_trace()
+    #     iuvlogit_list = [iuv_warp_list[i]*weight_dic[fid] for i,fid in enumerate(frame_idxs)]
+    #     iuvlogit_avg = torch.stack(iuvlogit_list, dim=0).sum(dim=0)
+    #     outputs[("flow", "list_list")].append(flow_list)
+    #     return inputs, outputs, iuv_warp_list, iuvlogit_avg
 
     ## Ref: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
     def custom(self, module):
@@ -443,36 +539,227 @@ class CondInst(nn.Module):
 
                 return losses
             else:
-
-                if self.infer_smooth_frame_num>0:
-                    assert len(batched_inputs)==1
-                    images_adj = batched_inputs[0]["image_adj_list"] #.to(self.device)
-                    images_adj = [self.normalizer(x) for x in images_adj]
-                    images_adj = ImageList.from_tensors(images_adj, self.backbone.size_divisibility)
-                    pdb.set_trace()
-
-
-                features = self.backbone(images.tensor)
-
-                if "instances" in batched_inputs[0]:
-                    gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-                    self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
-                else:
-                    gt_instances = None
-
-                agg_feats, mask_feats, sem_losses = self.mask_branch(features, skeleton_feats, gt_instances)
-                if self.use_mask_feats_iuvhead:
-                    iuv_feats, s_ins_feats = mask_feats, mask_feats
-                else:
-                    iuv_feats, s_ins_feats = agg_feats, mask_feats
-                proposals, proposal_losses = self.proposal_generator(
-                    images, features, gt_instances, self.controller
-                )
-
-                # "TODO add densepose inference"
                 assert len(batched_inputs)==1
-                imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
-                densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances, imgsize=imgsize)
+
+                def _run_single_img(images, batched_inputs, skeleton_feats):
+                    features = self.backbone(images.tensor)
+
+                    if "instances" in batched_inputs[0]:
+                        gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                        self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
+                        ## Print sparsity
+                        # h, w = gt_instances[0].gt_bitmasks_full.shape[-2:]
+                        # sparsity = torch.clamp(gt_instances[0].gt_bitmasks_full.float().sum(0),0,1).sum()/h/w
+                        # self.sparsity_list.append(sparsity)
+                        # ss = torch.tensor(self.sparsity_list)
+                        # print("sparsity mean {}, min {}, max {}".format(ss.mean(), ss.min(), ss.max()))
+                    else:
+                        gt_instances = None
+
+                    agg_feats, mask_feats, sem_losses = self.mask_branch(features, skeleton_feats, gt_instances)
+                    if self.use_mask_feats_iuvhead:
+                        iuv_feats, s_ins_feats = mask_feats, mask_feats
+                    else:
+                        iuv_feats, s_ins_feats = agg_feats, mask_feats
+                    proposals, proposal_losses = self.proposal_generator(
+                        images, features, gt_instances, self.controller
+                    )
+
+                    # "TODO add densepose inference"
+                    assert len(batched_inputs)==1
+                    imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
+                    densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances, imgsize=imgsize)
+
+                    return densepose_instances
+
+                def run_single_img(images, batched_inputs, skeleton_feats):
+                    # if self.infer_TTA_with_rand_flow:
+                    #     assert len(batched_inputs)==1
+                    #     assert not self.use_gt_ins, "TTA img do not have gt"
+                    #     gap = 12
+                    #     offset_list = [[gap,gap], [gap,-gap], [-gap,gap], [-gap,-gap]]
+                    #     num = len(offset_list) + 1
+                    #     densepose_instances = _run_single_img(images, batched_inputs, skeleton_feats)
+                    #     densepose_instances[0].pred_densepose.fine_segm /= num
+                    #     densepose_instances[0].pred_densepose.u /= num
+                    #     densepose_instances[0].pred_densepose.v /= num
+                    #     densepose_instances[0].pred_densepose.coarse_segm = num
+                    #     for (offset_x, offset_y) in offset_list:
+                    #         flow_fw = torch.zeros_like(images.tensor)[:,:2]
+                    #         flow_fw[:,0:1] += offset_x
+                    #         flow_fw[:,1:2] += offset_y
+                    #         # pdb.set_trace()
+                    #         images.tensor = self.flow_model.tensor_warp_via_flow(images.tensor, flow_fw)
+                    #         dp = _run_single_img(images, batched_inputs, skeleton_feats)
+                            
+                    # else:
+                    densepose_instances = _run_single_img(images, batched_inputs, skeleton_feats)
+                    return densepose_instances
+
+                "TODO: parallerl and cache the warping to speed up"
+                if self.infer_smooth_frame_num>0 or self.infer_TTA_with_rand_flow:
+                    assert len(batched_inputs)==1
+                    assert not self.use_gt_ins, "image_adj do not have gt"
+                    # pdb.set_trace()
+                    center_idx = self.infer_smooth_frame_num
+
+                    if self.infer_TTA_with_rand_flow:
+                        assert len(batched_inputs)==1
+                        assert not self.use_gt_ins, "TTA img do not have gt"
+                        gap = 4
+                        offset_list = [[gap,gap], [gap,-gap], [0,0], [-gap,gap], [-gap,-gap]]
+                        num = len(offset_list) 
+                        self.img_queue = [batched_inputs[0]["image"]]*num
+                        self.img_queue = [x.to(self.device) for x in self.img_queue]
+                        self.dp_output_queue = []
+                        for img, (offset_x, offset_y) in zip(self.img_queue, offset_list):
+                            img = img[None,...]
+                            flow_fw = torch.zeros_like(img)[:,:2]
+                            # pdb.set_trace()
+                            flow_fw[:,0:1] += offset_x
+                            flow_fw[:,1:2] += offset_y
+                            img_warp = self.flow_model.tensor_warp_via_flow(img, flow_fw)[0]
+
+                            # pdb.set_trace()
+                            # import imageio
+                            # imageio.imwrite('tmp/img.jpg', img[0].permute([1,2,0]).cpu().numpy())
+                            # imageio.imwrite('tmp/img_warp.jpg', img_warp.permute([1,2,0]).cpu().numpy()) 
+                            densepose_instances = run_single_img(ImageList.from_tensors([self.normalizer(img_warp)], self.backbone.size_divisibility), 
+                                                            batched_inputs, skeleton_feats)
+                            self.dp_output_queue.append(densepose_instances)
+                        self.img_queue = [F.interpolate(im[None,...], densepose_instances[0].pred_densepose.u.shape[-2:]) for im in self.img_queue]
+
+
+                        # densepose_instances = _run_single_img(images, batched_inputs, skeleton_feats)
+                        # densepose_instances[0].pred_densepose.fine_segm /= num
+                        # densepose_instances[0].pred_densepose.u /= num
+                        # densepose_instances[0].pred_densepose.v /= num
+                        # densepose_instances[0].pred_densepose.coarse_segm = num
+                        # for (offset_x, offset_y) in offset_list:
+                        #     flow_fw = torch.zeros_like(images.tensor)[:,:2]
+                        #     flow_fw[:,0:1] += offset_x
+                        #     flow_fw[:,1:2] += offset_y
+                        #     # pdb.set_trace()
+                        #     images.tensor = self.flow_model.tensor_warp_via_flow(images.tensor, flow_fw)
+                        #     dp = _run_single_img(images, batched_inputs, skeleton_feats)
+                    else:
+                        images_adj = batched_inputs[0]["image_adj_list"] #.to(self.device)
+                        if self.img_queue == []:
+                            self.img_queue = images_adj[:center_idx] + [batched_inputs[0]["image"]] + images_adj[center_idx:]
+                            
+                            self.img_queue = [x.to(self.device) for x in self.img_queue]
+                            # self.img_queue = [self.normalizer(x.to(self.device)) for x in self.img_queue]
+                            # self.img_queue = ImageList.from_tensors(self.img_queue, self.backbone.size_divisibility)
+                            for img in self.img_queue:
+                                densepose_instances = run_single_img(ImageList.from_tensors([self.normalizer(img)], self.backbone.size_divisibility), 
+                                                                batched_inputs, skeleton_feats)
+                                self.dp_output_queue.append(densepose_instances)
+                            self.img_queue = [F.interpolate(im[None,...], densepose_instances[0].pred_densepose.u.shape[-2:]) for im in self.img_queue]
+                        else:
+                            self.img_queue.pop(0)
+                            self.img_queue.append(images_adj[-1].to(self.device))
+
+
+                            densepose_instances = run_single_img(ImageList.from_tensors([self.normalizer(self.img_queue[-1])], self.backbone.size_divisibility), 
+                                                                batched_inputs, skeleton_feats)
+                            # pdb.set_trace()
+                            self.dp_output_queue.pop(0)
+                            self.dp_output_queue.append(densepose_instances)
+                            self.img_queue[-1] = F.interpolate(self.img_queue[-1][None,...], densepose_instances[0].pred_densepose.u.shape[-2:])
+
+
+                    dp_output_warp = copy.deepcopy(self.dp_output_queue[center_idx])
+                    coarse_segm = dp_output_warp[0].pred_densepose.coarse_segm
+                    coarse_segm_list = torch.chunk(coarse_segm, coarse_segm.shape[0])
+                    coarse_segm_list_list = [[a] for a in coarse_segm_list]
+                    # coarse_segm_cnt_list = [1] * len(coarse_segm_list)
+
+                    # weight_list = [0.2,0.2,0.2,0.2,0.2]
+                    if self.infer_TTA_with_rand_flow:
+                        weight_list = [0.2,0.2,0.4,0.2,0.2]
+                    else:
+                        weight_list = [0.1,0.2,0.4,0.2,0.1]
+                    weight_list = [w/sum(weight_list) for w in weight_list]
+                    dp_output_warp[0].pred_densepose.fine_segm *= weight_list[center_idx]
+                    dp_output_warp[0].pred_densepose.u *= weight_list[center_idx]
+                    dp_output_warp[0].pred_densepose.v *= weight_list[center_idx]
+                    dp_output_warp[0].pred_densepose.coarse_segm *= weight_list[center_idx]
+                    for i in range(len(self.img_queue)):
+                        if i == center_idx:
+                            continue
+                        else:
+                            # pdb.set_trace()
+                            # img_tgt = torch.tensor(img_queue[center_idx]).permute([2,0,1])[None,...].float()
+                            # img_ref = torch.tensor(img_queue[i]).permute([2,0,1])[None,...].float()
+                            img_tgt = self.img_queue[center_idx]
+                            img_ref = self.img_queue[i]
+                            if self.infer_TTA_with_rand_flow:
+                                img = self.img_queue[i]
+                                offset_x, offset_y = offset_list[i]
+                                flow_fw = torch.zeros_like(img)[:,:2]
+                                # pdb.set_trace()
+                                flow_fw[:,0:1] -= offset_x
+                                flow_fw[:,1:2] -= offset_y
+                            else:
+                                flow_fw = self.flow_model.pred_flow(img_tgt, img_ref)
+                            dp = copy.deepcopy(self.dp_output_queue[i])
+                            if not hasattr(dp[0], "pred_densepose"):
+                                continue
+                            ## Warp IUV
+                            dp_output_warp[0].pred_densepose.fine_segm += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.fine_segm, flow_fw)
+                            dp_output_warp[0].pred_densepose.u += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.u, flow_fw)
+                            dp_output_warp[0].pred_densepose.v += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.v, flow_fw)
+                            s_tmp = weight_list[i] * dp_output_warp[0].pred_densepose.coarse_segm
+                            s_list_tmp = torch.chunk(s_tmp, s_tmp.shape[0])
+                            binary_th = 0.1
+                            iou_th = 0.7
+                            for s_t in s_list_tmp:
+                                s_t_b = s_t[0,1]>binary_th
+                                for idx in range(len(coarse_segm_list_list)):
+                                    s = coarse_segm_list_list[idx][0]
+                                    s_b = s[0,1]>binary_th
+                                    iou = (s_t_b*s_b).float().sum() / ((s_t_b+s_b).float().sum() + 1e-7)
+                                    # print(iou)
+                                    # import imageio
+                                    # pdb.set_trace()
+                                    # imageio.imwrite('tmp/s_{}.png'.format(iou), torch.cat([s_t,s], dim=-1)[0].permute(1,2,0).cuda().numpy())
+                                    if iou>iou_th:
+                                        coarse_segm_list_list[idx].append(s_t)
+                                        # break
+
+                    # dp_output_warp[0].pred_densepose.fine_segm /= len(self.img_queue)
+                    # dp_output_warp[0].pred_densepose.u /= len(self.img_queue)
+                    # dp_output_warp[0].pred_densepose.v /= len(self.img_queue)
+                    # coarse_segm = [torch.stack(s_list,0).mean(0) for s_list in coarse_segm_list_list]
+                    coarse_segm = [torch.stack(s_list,0).sum(0) for s_list in coarse_segm_list_list]
+
+                    dp_output_warp[0].pred_densepose.coarse_segm = torch.cat(coarse_segm, dim=0)
+                    densepose_instances = dp_output_warp
+
+
+                else:
+                    densepose_instances = run_single_img(images, batched_inputs, skeleton_feats)
+                    # features = self.backbone(images.tensor)
+
+                    # if "instances" in batched_inputs[0]:
+                    #     gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+                    #     self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
+                    # else:
+                    #     gt_instances = None
+
+                    # agg_feats, mask_feats, sem_losses = self.mask_branch(features, skeleton_feats, gt_instances)
+                    # if self.use_mask_feats_iuvhead:
+                    #     iuv_feats, s_ins_feats = mask_feats, mask_feats
+                    # else:
+                    #     iuv_feats, s_ins_feats = agg_feats, mask_feats
+                    # proposals, proposal_losses = self.proposal_generator(
+                    #     images, features, gt_instances, self.controller
+                    # )
+
+                    # # "TODO add densepose inference"
+                    # assert len(batched_inputs)==1
+                    # imgsize = (batched_inputs[0]["height"],batched_inputs[0]["width"])
+                    # densepose_instances = self._forward_mask_heads_test(proposals, features, s_ins_feats, iuv_feats, gt_instances=gt_instances, imgsize=imgsize)
                 
                 # pdb.set_trace()
                 # import imageio

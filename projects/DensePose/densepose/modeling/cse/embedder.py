@@ -37,6 +37,11 @@ def create_embedder(embedder_spec: CfgNode, embedder_dim: int) -> nn.Module:
         An embedder instance for the specified configuration
         Raises ValueError, in case of unexpected  embedder type
     """
+
+    ## To address ssl.SSLCertVerificationError
+    import ssl
+    ssl._create_default_https_context = ssl._create_unverified_context
+    
     embedder_type = EmbedderType(embedder_spec.TYPE)
     if embedder_type == EmbedderType.VERTEX_DIRECT:
         embedder = VertexDirectEmbedder(

@@ -9,7 +9,7 @@ from detectron2.structures.instances import Instances
 # <<<<<<< HEAD
 # from densepose.converters import ToChartResultConverter
 # =======
-from densepose.converters import ToChartResultConverterWithConfidences
+from densepose.converters import ToChartResultConverter, ToChartResultConverterWithConfidences
 from densepose.structures import (
     DensePoseChartResultWithConfidences,
     DensePoseEmbeddingPredictorOutput,
@@ -102,8 +102,8 @@ class DensePoseResultExtractor(object):
             if select is not None:
                 dpout = dpout[select]
                 boxes_xyxy = boxes_xyxy[select]
-            # converter = ToChartResultConverter()
-            converter = ToChartResultConverterWithConfidences()
+            converter = ToChartResultConverter()
+            # converter = ToChartResultConverterWithConfidences()
             results = [converter.convert(dpout[i], boxes_xyxy[[i]]) for i in range(len(dpout))]
             return results, boxes_xywh
         else:

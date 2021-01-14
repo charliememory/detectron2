@@ -582,7 +582,7 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         self.add_sparse = spconv.tables.AddTable()
         self.checkpoint_grad_num = cfg.MODEL.CONDINST.CHECKPOINT_GRAD_NUM
         # self.replace_minus_one = cfg.MODEL.CONDINST.IUVHead.REPLACE_MINUS_ONE
-        assert self.use_ins_gn
+        # assert self.use_ins_gn
         # fmt: on
         # pad_size = kernel_size // 2
         # pad_size = 0
@@ -1233,7 +1233,7 @@ class DensePoseV1ConvXGNSparseGNHead(nn.Module):
         return indice_tuple
 
 
-    def forward(self, features: spconv.SparseConvTensor, ins_indices_batch: List[torch.Tensor], ins_indices_len):
+    def forward(self, features: spconv.SparseConvTensor, ins_indices_batch: List[torch.Tensor]=None, ins_indices_len=None):
         """
         Apply DensePose fully convolutional head to the input features
 

@@ -334,7 +334,7 @@ class BasicStem(CNNBlockBase):
     The standard ResNet stem (layers before the first residual block).
     """
 
-    def __init__(self, in_channels=3, out_channels=64, norm="BN"):
+    def __init__(self, in_channels=3, out_channels=64, norm="BN", use_blurpool=False):
         """
         Args:
             norm (str or callable): norm after the first conv layer.
@@ -353,10 +353,19 @@ class BasicStem(CNNBlockBase):
         )
         weight_init.c2_msra_fill(self.conv1)
 
+        self.use_blurpool = use_blurpool
+        if self.use_blurpool:
+            from .blurpool import BlurPool
+            self.blurpool = BlurPool(out_channels, stride=2)
+
     def forward(self, x):
         x = self.conv1(x)
         x = F.relu_(x)
-        x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1)
+
+        if self.use_blurpool:
+            x = self.blurpool(x)
+        else:
+            x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1)
         return x
 
 
@@ -596,6 +605,7 @@ def build_densepose_resnet_backbone(cfg, input_shape):
         in_channels=input_shape.channels,
         out_channels=cfg.MODEL.RESNETS.STEM_OUT_CHANNELS,
         norm=norm,
+        use_blurpool=cfg.MODEL.RESNETS.BLUR_POOL
     )
 
     # fmt: off

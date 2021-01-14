@@ -265,28 +265,11 @@ class DecoderSparse(nn.Module):
             m = fg_mask[n:n+1]
             x_indices = coord[0][m[0,0]>0]
             y_indices = coord[1][m[0,0]>0]
-            if self.use_ins_gn:
-                # pdb.set_trace()
-                # bg_and_ins = torch.cat([m[0],ins_mask_list[n].float()], dim=0)
-                # ins_indices = torch.argmax(bg_and_ins, dim=0)[m[0,0]>0] + ins_cnt
-                # try:
-                ins_indices = torch.argmax(ins_mask_list[n].float(), dim=0)[m[0,0]>0] + ins_cnt
-                # except:
-                #     pdb.set_trace()
-                ins_indices_batch.append(ins_indices)
-                ins_cnt += ins_mask_list[n].shape[0]
-
-                ins_indices_len.append(torch.sum(ins_mask_list[n],dim=[1,2]))
-
-                # import imageio
-                # masks = ins_mask_list[n]
-                # pdb.set_trace()
-                # for ii in range(masks.shape[0]):
-                #     imageio.imwrite('tmp/masks_{}.png'.format(ii), masks[ii].detach().cpu().numpy())
-                # tmp = torch.argmax(ins_mask_list[n].float(), dim=0).float() + 1
-                # imageio.imwrite('tmp/ins_masks.png', (tmp/tmp.max() * m[0,0]).detach().cpu().numpy())
-                # imageio.imwrite('tmp/m.png', m[0,0].detach().cpu().numpy())
-                # pdb.set_trace()
+            # if self.use_ins_gn:
+            ins_indices = torch.argmax(ins_mask_list[n].float(), dim=0)[m[0,0]>0] + ins_cnt
+            ins_indices_batch.append(ins_indices)
+            ins_cnt += ins_mask_list[n].shape[0]
+            ins_indices_len.append(torch.sum(ins_mask_list[n],dim=[1,2]))
 
 
             b_indices = torch.ones_like(x_indices)*n
@@ -303,12 +286,12 @@ class DecoderSparse(nn.Module):
         # else:
         x = spconv.SparseConvTensor(sparse_feat_batch, sparse_coord_batch, (H,W), N)
         # pdb.set_trace()
-        if self.use_ins_gn:
-            ins_indices_batch = torch.cat(ins_indices_batch,dim=0)
-            ins_indices_len = torch.cat(ins_indices_len,dim=0)
-            x = self.densepose_head(x, ins_indices_batch, ins_indices_len)
-        else:
-            x = self.densepose_head(x)
+        # if self.use_ins_gn:
+        ins_indices_batch = torch.cat(ins_indices_batch,dim=0)
+        ins_indices_len = torch.cat(ins_indices_len,dim=0)
+        x = self.densepose_head(x, ins_indices_batch, ins_indices_len)
+        # else:
+        #     x = self.densepose_head(x)
 
         # x = x * fg_mask
         # x = self.densepose_head(x, ins_mask_list)

@@ -1,0 +1,27 @@
+_BASE_: "Base-DensePose-CondInst-CSE.yaml"
+MODEL:
+  WEIGHTS: "detectron2://ImageNetPretrained/MSRA/R-50.pkl"
+  RESNETS:
+    DEPTH: 50
+  CONDINST:
+    MASK_BRANCH:
+      OUT_CHANNELS: 8 # 104 = 96+8
+    IUVHead:
+      CHANNELS: 128
+    MASK_HEAD:
+      CHANNELS: 8
+
+  
+  ROI_DENSEPOSE_HEAD:
+    # PREDICTOR_NAME: "DensePoseChartWithConfidencePredictor"
+    # LOSS_NAME: "DensePoseChartWithConfidenceLoss"
+    PREDICTOR_NAME: "DensePoseChartPredictor"
+    LOSS_NAME: "DensePoseChartGlobalIUVSeparatedSLoss"
+    CSE:
+      EMBED_LOSS_NAME: "EmbeddingLoss"
+    NUM_COARSE_SEGM_CHANNELS: 1
+    
+SOLVER:
+  MAX_ITER: 130000
+  STEPS: (100000, 120000)
+

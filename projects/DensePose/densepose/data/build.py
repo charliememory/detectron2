@@ -475,29 +475,23 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
         if cfg.MODEL.LOAD_PROPOSALS
         else None,
     )
+
+    # import pdb
+    # dataset_dicts = dataset_dicts[:100]
+    ins_num = cfg.MODEL.CONDINST.INFER_INSTANCE_NUM # range in [1,14]
+    if ins_num>0:
+        dataset_dicts_new = []
+        for idx in range(len(dataset_dicts)):
+            if len(dataset_dicts[idx]["annotations"])==ins_num:
+            # if len(dataset_dicts[idx]["annotations"]) in [13,14]:
+                dataset_dicts_new.append(dataset_dicts[idx])
+        dataset_dicts = dataset_dicts_new
+
+
     if mapper is None:
         mapper = DatasetMapper(cfg, False)
-# <<<<<<< HEAD
-#     dataset = MapDataset(dataset, mapper)
-
-#     sampler = InferenceSampler(len(dataset))
-#     # sampler = InferenceSampler(min(1508,len(dataset)))
-#     # sampler = InferenceSampler(10)
-#     # import pdb
-#     # pdb.set_trace()
-#     # Always use 1 image per worker during inference since this is the
-#     # standard when reporting inference time in papers.
-#     batch_sampler = torch.utils.data.sampler.BatchSampler(sampler, 1, drop_last=False)
-
-#     data_loader = torch.utils.data.DataLoader(
-#         dataset,
-#         num_workers=cfg.DATALOADER.NUM_WORKERS,
-#         batch_sampler=batch_sampler,
-#         collate_fn=trivial_batch_collator,
-# =======
     return d2_build_detection_test_loader(
         dataset_dicts, mapper=mapper, num_workers=cfg.DATALOADER.NUM_WORKERS
-# >>>>>>> upstream/master
     )
 
 
