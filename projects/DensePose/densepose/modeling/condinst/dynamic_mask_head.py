@@ -183,6 +183,7 @@ class DynamicMaskHead(nn.Module):
         # self.inference_global_siuv = cfg.MODEL.CONDINST.INFERENCE_GLOBAL_SIUV
         # if self.inference_global_siuv:
         #     assert not self.training
+        self.use_sparse_conv = "sparse" in cfg.MODEL.ROI_DENSEPOSE_HEAD.NAME.lower()
 
         soi = cfg.MODEL.FCOS.SIZES_OF_INTEREST
         self.register_buffer("sizes_of_interest", torch.tensor(soi + [soi[-1] * 2]))
@@ -190,6 +191,10 @@ class DynamicMaskHead(nn.Module):
 
         # self.n_segm_chan = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
         self.n_segm_chan = 1
+        self.pred_ins_body = cfg.MODEL.CONDINST.PREDICT_INSTANCE_BODY
+        self.infer_ins_body = cfg.MODEL.CONDINST.INFER_INSTANCE_BODY
+        if self.pred_ins_body:
+            self.n_segm_chan += 1
         # self.n_segm_chan = 2 + 1 ## S logit (of SIUV) has 2-channels, instance mask has 1-channel
 
         weight_nums, bias_nums = [], []
@@ -428,8 +433,13 @@ class DynamicMaskHead(nn.Module):
 
         gt_bitmasks = torch.cat([per_im.gt_bitmasks for per_im in gt_instances])
         gt_bitmasks = F.interpolate(gt_bitmasks[:,None,...].float(), size=(H,W), mode='nearest')
-        gt_bitmasks = self._torch_erode(gt_bitmasks, kernel_size=dilate_ks)
-        gt_bitmasks = self._torch_dilate(gt_bitmasks, kernel_size=dilate_ks*2)
+        if dilate_ks==0:
+            pass
+        elif dilate_ks<0:
+            gt_bitmasks = self._torch_erode(gt_bitmasks, kernel_size=-dilate_ks)
+        elif dilate_ks>0:
+            gt_bitmasks = self._torch_erode(gt_bitmasks, kernel_size=dilate_ks)
+            gt_bitmasks = self._torch_dilate(gt_bitmasks, kernel_size=dilate_ks*2)
         ins_mask_list = []
 
         rel_coord_gt = torch.zeros([N,2,H,W], device=device).float()
@@ -445,10 +455,16 @@ class DynamicMaskHead(nn.Module):
             #     pdb.set_trace()
             ins_mask = gt_bitmasks[cnt:cnt+num,0]
 
+            # if len(ins_mask.shape)==3:
             valid_idxs = ins_mask.sum(dim=[1,2]) > 0
             if ins_mask[valid_idxs].shape[0]==0:
                 pdb.set_trace()
             ins_mask_list.append(ins_mask[valid_idxs])
+            # elif len(ins_mask.shape)==4:
+            #     valid_idxs = ins_mask.sum(dim=[1,2,3]) > 0
+            #     if ins_mask[valid_idxs].shape[0]==0:
+            #         pdb.set_trace()
+            #     ins_mask_list.append(ins_mask[valid_idxs,0])
             cnt += num
             # pdb.set_trace()
         return rel_coord_gt, ins_mask_list
@@ -471,7 +487,8 @@ class DynamicMaskHead(nn.Module):
         return ins_mask_list
 
     def __call__(self, iuv_head_func, fpn_features, mask_feats, iuv_feats, mask_feat_stride, pred_instances, 
-            gt_instances=None, mask_out_bg_feats="none", pred_instances_nms=None, images=None, skeleton_feats_gt=None):
+            gt_instances=None, mask_out_bg_feats="none", pred_instances_nms=None, images=None, 
+            skeleton_feats_gt=None, body_semantics_gt=None):
         # torch.cuda.empty_cache()
         if self.training:
             # if not self.segm_trained_by_masks:
@@ -521,6 +538,8 @@ class DynamicMaskHead(nn.Module):
                     )
                 if self.n_segm_chan==1:
                     s_logits = s_logits.sigmoid()
+                elif self.n_segm_chan==2:
+                    s_logits = s_logits.sigmoid()
                 elif self.n_segm_chan==3:
                     s_logits = s_logits[:,:1].sigmoid()
                 else:
@@ -533,6 +552,18 @@ class DynamicMaskHead(nn.Module):
                     loss_mask = dice_coefficient(s_logits, gt_bitmasks)
                     losses["loss_densepose_S"] = loss_mask.mean() * self.w_segm
                 else:
+                    # if not self.use_sparse_conv:
+                    #     pdb.
+                    #     iuv_logits = iuv_head_func(iuv_feats)
+                    #     coarse_segm = s_logits
+                    #     densepose_outputs = DensePoseChartPredictorOutput(
+                    #                                                         coarse_segm=coarse_segm,
+                    #                                                         fine_segm=iuv_logits[:,:25],
+                    #                                                         u=iuv_logits[:,25:50],
+                    #                                                         v=iuv_logits[:,50:75],
+                    #                                                         stride=self.mask_out_stride,
+                    #                                                      )
+                    # else:
                     ## create_rel_coord_gt if needed
                     # H, W = s_logits.shape[-2:]
                     N, _, H, W = fpn_features[list(fpn_features.keys())[0]].shape
@@ -567,8 +598,18 @@ class DynamicMaskHead(nn.Module):
                         rel_coord_list = []
                         pred_bitmasks = (s_logits_keep[:,-1:].detach()>0.05).float()
                         pred_bitmasks = F.interpolate(pred_bitmasks, (H,W))
-                        pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
-                        pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+
+                        # pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
+                        # pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+                        
+                        if self.dilate_ks==0:
+                            pass
+                        elif self.dilate_ks<0:
+                            pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=-self.dilate_ks)
+                        elif self.dilate_ks>0:
+                            pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
+                            pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+
                         ins_mask_list = []
                         for idx in range(N):
                             if idx in im_inds:
@@ -584,111 +625,13 @@ class DynamicMaskHead(nn.Module):
                         ins_mask_list = self.remove_mask_overlap(ins_mask_list)
                     fg_mask = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
                     fg_mask = torch.clamp(torch.stack(fg_mask, dim=0), min=0, max=1)
-                    # pdb.set_trace()
-
-
-
-                    # import imageio
-                    # for ii in range(ins_mask_list[0].shape[0]):
-                    #     imageio.imwrite("tmp/ins_mask_{}.png".format(ii), ins_mask_list[0][ii].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/fg_mask.png", fg_mask[0,0].detach().cpu().numpy())
-                    # fg_mask2 = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_list]
-                    # fg_mask2 = torch.stack(fg_mask2, dim=0).float()
-                    # imageio.imwrite("tmp/fg_mask2.png", (fg_mask2[0,0]/fg_mask2[0,0].max()).detach().cpu().numpy())
-                    # pdb.set_trace()
-
-                    ## remove overlap
-                    # print(torch.sum(ins_mask_list[0],dim=0).max())
-                    # for i in range(len(ins_mask_list)):
-                    #     if ins_mask_list[i].sum()!=fg_mask[i].sum():
-                    #         pdb.set_trace()
-
-                    # print(ins_mask_list[0].sum())
-                    # print(torch.sum(ins_mask_list[1]))
-
-                    # gt_ins_mask_list = [per_im.gt_bitmasks for per_im in gt_instances]
-                    # rel_coord_gt = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device, self.norm_coord_boxHW)
-                    ########## Debug
-                    # pdb.set_trace()
-
-                    # rel_coord = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device)
-                    # rel_coord_gt = rel_coord.clone()
-
-                    # im_inds = pred_instances.im_inds
-                    # rel_coord_list = []
-                    # for idx in range(N_ins):
-                    #     if idx in im_inds:
-                    #         cc = relative_coords[im_inds==idx,].reshape(-1, 2, H, W)
-                    #         ss = s_logits[im_inds==idx,-1:]
-                    #         coord = torch.mean(cc*ss, dim=0, keepdim=True) 
-                    #         rel_coord_list.append(coord) #.reshape(1, 2, H, W)
-                    # rel_coord = torch.cat(rel_coord_list, dim=0)
-
-                    # imageio.imwrite('tmp/rel_coord_gt.png',rel_coord_gt[0,0].detach().cpu().numpy())
-                    # imageio.imwrite('tmp/rel_coord.png',rel_coord[0,0].detach().cpu().numpy())
-                    # r = rel_coord_gt[0,0]
-                    # g = rel_coord[0,0]
-                    # b = torch.zeros_like(g)
-                    # imageio.imwrite('tmp/rel_coord_gt_est.png',torch.stack([r,g,b],dim=-1).detach().cpu().numpy())
-                    # pdb.set_trace()
-                    ##########
 
 
                     if mask_out_bg_feats == "none":
                         fg_mask = torch.ones([N,1,H,W], device=iuv_feats.device)
-                    # else:
-                    #     # if self.use_ins_gn:
-                    #     #     pass
-                    #     # else:
-                    #     # N = iuv_feats.shape[0]
-                    #     # if mask_out_bg_feats=="hard":
-                    #     fg_mask = (rel_coord[:,0:1]!=0).float()
-                    #     # if self.use_gt_ins:
-                    #     #     fg_mask = (rel_coord[:,0:1]!=0).float()
-                    #     # else:
-                    #     #     fg_mask = s_logits.detach()
-                    #     #     fg_mask_list = []
-                    #     #     for i in range(N):
-                    #     #         fg_mask_list.append(torch.max(fg_mask[pred_instances.im_inds==i], dim=0, keepdim=True)[0])
-                    #     #     # pdb.set_trace()
-                    #     #     fg_mask = torch.cat(fg_mask_list, dim=0).detach()
-                    #     #     fg_mask = (fg_mask>0.05).float()
-                    #     fg_mask = F.interpolate(fg_mask, (H,W))
-                    # pdb.set_trace()
-                    # if self.dilate_ks>0:
-                    #     fg_mask = self._torch_dilate(fg_mask, kernel_size=self.dilate_ks)
 
-                            # pdb.set_trace()
-                            # import imageio
-                            # imageio.imwrite("tmp/fg_mask_soft.png", fg_mask_list[0][0,0].detach().cpu().numpy())
-                            # imageio.imwrite("tmp/fg_mask_hard_0.1.png", (fg_mask_list[0][0,0]>0.1).float().detach().cpu().numpy())
-                            # imageio.imwrite("tmp/fg_mask_hard_0.05.png", (fg_mask_list[0][0,0]>0.05).float().detach().cpu().numpy())
-                            # imageio.imwrite("tmp/fg_mask_hard_0.05_dilate.png", fg_mask[0,0].detach().cpu().numpy())
-
-                    # import imageio
-                    # rel_coord_gt, ins_mask_gt_list = self._create_rel_coord_gt(gt_instances, H, W, self.mask_out_stride, s_logits.device, self.norm_coord_boxHW, self.dilate_ks)
-                    # for ii in range(ins_mask_list[0].shape[0]):
-                    #     imageio.imwrite("tmp/ins_mask_{}.png".format(ii), ins_mask_list[0][ii].detach().cpu().numpy())
-                    # for ii in range(ins_mask_gt_list[0].shape[0]):
-                    #     imageio.imwrite("tmp/ins_mask_gt_{}.png".format(ii), ins_mask_gt_list[0][ii].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/rel_coord.png", rel_coord[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/rel_coord_gt.png", rel_coord_gt[0,0].detach().cpu().numpy())
-                    # imageio.imwrite("tmp/fg_mask.png", fg_mask[0,0].detach().cpu().numpy())
-                    # fg_mask_gt = [ins_mask.sum(dim=0,keepdim=True) for ins_mask in ins_mask_gt_list]
-                    # fg_mask_gt = torch.clamp(torch.stack(fg_mask_gt, dim=0), min=0, max=1)
-                    # imageio.imwrite("tmp/fg_mask_gt.png", fg_mask_gt[0,0].detach().cpu().numpy())
-                    # pdb.set_trace()
-                    # imageio.imwrite("tmp/ins_mask.png", torch.sum(ins_mask_list[0],dim=0).detach().cpu().numpy())
-                    # imageio.imwrite("tmp/ins_mask1.png", torch.sum(ins_mask_list[1],dim=0).detach().cpu().numpy())
-
-                    # fg_mask_gt = (rel_coord_gt[:,0:1]!=0).float()
-                    # fg_mask_gt = F.interpolate(fg_mask_gt, (H,W))
-                    # imageio.imwrite("tmp/fg_mask_gt.png", fg_mask_gt[0,0].detach().cpu().numpy())
-
-                    # if mask_out_bg_feats != "none":
-                    #     iuv_logits = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats*fg_mask, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances)
-                    # else:
                     _, iuv_logits, features_dp_ori = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
+                
                     coarse_segm = s_logits
                     # iuv_logits = iuv_feats[:1,:75,:112,:112].expand_as(iuv_logits)
 
@@ -713,6 +656,7 @@ class DynamicMaskHead(nn.Module):
                                                                         aux_supervision=features_dp_ori[:,75:],
                                                                         stride=self.mask_out_stride,
                                                                      )
+                                                                        # aux_supervision=features_dp_ori[:,75:],
                     for i in range(len(gt_instances)):
                         gt_instances[i].set('proposal_boxes', gt_instances[i].get('gt_boxes').clone())
                         # gt_instances[i].set('pred_classes', torch.tensor([0]*len(gt_instances[i]), device=s_logits.device))
@@ -721,9 +665,18 @@ class DynamicMaskHead(nn.Module):
                     
                     _, gt_instances = self.densepose_data_filter(None, gt_instances)
                     # if len(gt_instances)!=len(proposals):
-                    #     pdb.set_trace()
+                    # pdb.set_trace()
+
+                    gt_bitmasks_body = None
+                    if self.pred_ins_body:
+                        gt_inds = pred_instances.gt_inds
+                        gt_bitmasks_body = torch.cat([per_im.gt_bitmasks_body for per_im in gt_instances])
+                        gt_bitmasks_body = gt_bitmasks_body[gt_inds].unsqueeze(dim=1).to(dtype=mask_feats.dtype)
+
                     densepose_loss_dict = self.densepose_losses(
-                        gt_instances, densepose_outputs, gt_bitmasks, images=images, skeleton_feats_gt=skeleton_feats_gt
+                        gt_instances, densepose_outputs, gt_bitmasks, images=images, 
+                        skeleton_feats_gt=skeleton_feats_gt, body_semantics_gt=body_semantics_gt,
+                        features_dp_ori=features_dp_ori, gt_bitmasks_body=gt_bitmasks_body
                     )
                     losses.update(densepose_loss_dict)
             # torch.cuda.empty_cache()
@@ -743,15 +696,23 @@ class DynamicMaskHead(nn.Module):
                 # else:
                 #     raise NotImplementedError
 
-                if self.n_segm_chan==1:
-                    "To mimic 2 channels segmentation during inference"
+                if self.pred_ins_body:
+                    s_logits, coarse_segm_body_mask = s_logits[:,0:1], s_logits[:,1:2].clone()
                     s_logits = s_logits.sigmoid()
                     s_logits = torch.cat([1-s_logits,s_logits],dim=1)
-                elif self.n_segm_chan==3:
-                    s_logits = s_logits[:,:1].sigmoid()
-                    s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+                    coarse_segm_body_mask = coarse_segm_body_mask.sigmoid()
+                    coarse_segm_body_mask = torch.cat([1-coarse_segm_body_mask,coarse_segm_body_mask],dim=1)
+                    # pdb.set_trace()
                 else:
-                    raise NotImplementedError
+                    if self.n_segm_chan==1:
+                        "To mimic 2 channels segmentation during inference"
+                        s_logits = s_logits.sigmoid()
+                        s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+                    elif self.n_segm_chan==3:
+                        s_logits = s_logits[:,:1].sigmoid()
+                        s_logits = torch.cat([1-s_logits,s_logits],dim=1)
+                    else:
+                        raise NotImplementedError
 
                 ## create_rel_coord_gt if needed
                 N, _, H, W = fpn_features[list(fpn_features.keys())[0]].shape
@@ -806,8 +767,17 @@ class DynamicMaskHead(nn.Module):
 
                     pred_bitmasks = (s_logits[:,-1:].detach()>0.05).float()
                     pred_bitmasks = F.interpolate(pred_bitmasks, (H,W))
-                    pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
-                    pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+                    # pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
+                    # pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+
+                    if self.dilate_ks==0:
+                        pass
+                    elif self.dilate_ks<0:
+                        pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=-self.dilate_ks)
+                    elif self.dilate_ks>0:
+                        pred_bitmasks = self._torch_erode(pred_bitmasks, kernel_size=self.dilate_ks)
+                        pred_bitmasks = self._torch_dilate(pred_bitmasks, kernel_size=self.dilate_ks*2)
+
                     ins_mask_list = []
                     for idx in range(N):
                         if idx in im_inds:
@@ -871,6 +841,9 @@ class DynamicMaskHead(nn.Module):
                     # coarse_segm = s_logits
                 coarse_segm, iuv_logits, features_dp_ori = iuv_head_func(fpn_features, s_logits.detach(), iuv_feats, mask_feat_stride, rel_coord, pred_instances, fg_mask, gt_instances, ins_mask_list)
                 
+                if self.pred_ins_body and self.infer_ins_body:
+                    coarse_segm = coarse_segm_body_mask
+                    
                 # import imageio
                 # for i in range(coarse_segm.shape[0]):
                 #     imageio.imwrite("tmp/coarse_segm_{}.png".format(i), coarse_segm[i,1].detach().cpu().numpy())
@@ -889,7 +862,6 @@ class DynamicMaskHead(nn.Module):
                 #     W = max([iuv.shape[-1] for iuv in iuv_logits])
                 #     iuv_logits = [F.interpolate(iuv, size=(H,W)) for iuv in iuv_logits]
                 #     iuv_logits = torch.stack(iuv_logits, dim=0).mean(dim=0)
-
                 densepose_outputs = DensePoseChartPredictorOutput(
                                                                     coarse_segm=coarse_segm,
                                                                     fine_segm=iuv_logits[:,:25],

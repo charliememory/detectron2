@@ -5,6 +5,7 @@ import copy, pdb, imageio
 import logging
 from typing import Any, Dict, Tuple, List
 import torch
+from torch.nn import functional as F
 from fvcore.common.file_io import PathManager
 import numpy as np
 
@@ -89,6 +90,7 @@ class DatasetMapper:
         self.use_gt_skeleton = cfg.MODEL.CONDINST.IUVHead.GT_SKELETON
         if self.use_gt_skeleton:
             self.keypoint_on = True
+        self.use_aux_body_semantics = cfg.MODEL.CONDINST.AUX_SUPERVISION_BODY_SEMANTICS
 
         self.infer_smooth_frame_num = cfg.MODEL.INFERENCE_SMOOTH_FRAME_NUM
 
@@ -169,6 +171,9 @@ class DatasetMapper:
 
         if self.mask_on:
             self._add_densepose_masks_as_segmentation(annos, image_shape)
+        if self.use_aux_body_semantics:
+            dataset_dict["body_semantics"] = self._add_densepose_body_semantics(annos, image_shape)
+
 
         instances = utils.annotations_to_instances(annos, image_shape, mask_format="bitmask")
         densepose_annotations = [obj.get("densepose") for obj in annos]
@@ -181,6 +186,7 @@ class DatasetMapper:
             dataset_dict["skeleton_feat"] = self._get_skeleton_feat(annos, image_shape)
             # if ske_feat is not None:
             # dataset_dict["skeleton_feats"] = ske_feats
+
 
         dataset_dict["instances"] = instances[instances.gt_boxes.nonempty()]
         return dataset_dict
@@ -261,6 +267,7 @@ class DatasetMapper:
             x0, y0, x1, y1 = (
                 v.item() for v in BoxMode.convert(obj["bbox"], obj["bbox_mode"], BoxMode.XYXY_ABS)
             )
+            # pdb.set_trace()
             segm_aligned = (
                 ROIAlign((y1 - y0, x1 - x0), 1.0, 0, aligned=True)
                 .forward(segm_dp.view(1, 1, *segm_dp.shape), bbox_segm_dp)
@@ -270,3 +277,41 @@ class DatasetMapper:
             image_mask[y0:y1, x0:x1] = segm_aligned
             # segmentation for BitMask: np.array [H, W] of np.bool
             obj["segmentation"] = image_mask >= 0.5
+
+    def _add_densepose_body_semantics(
+        self, annotations: List[Any], image_shape_hw: Tuple[int, int]
+    ):
+        body_semantics = torch.zeros([1, 1, image_shape_hw[0], image_shape_hw[1]], dtype=torch.int)
+        for obj in annotations:
+            if ("densepose" not in obj) or obj["densepose"] is None:
+                continue
+            segm_dp = obj["densepose"].segm
+            # segm_h, segm_w = segm_dp.shape
+            # image bbox
+            x0, y0, x1, y1 = (
+                v.round().astype(np.int).item() for v in BoxMode.convert(obj["bbox"], obj["bbox_mode"], BoxMode.XYXY_ABS)
+            )
+            y1 = min(y1, image_shape_hw[0]-1)
+            x1 = min(x1, image_shape_hw[1]-1)
+            segm_dp = F.interpolate(segm_dp.view(1, 1, *segm_dp.shape), size=(y1-y0, x1-x0))
+            body_semantics_tmp = torch.zeros_like(body_semantics)
+            body_semantics_tmp[:, :, y0:y1, x0:x1] = segm_dp
+            # pdb.set_trace()
+            body_semantics_tmp *= (body_semantics==0).int()
+            body_semantics += body_semantics_tmp
+            # rois = torch.tensor([[0, x0,y0,x1-x0,y1-y0]])
+            # rois = torch.tensor([[0, 100,100,500,500]])
+            # segm_aligned = (
+            #     ROIAlign(image_shape_hw, 1.0, 0, aligned=True).forward(segm_dp.view(1, 1, *segm_dp.shape), rois)
+            #     .squeeze()
+            # )
+            # pdb.set_trace()
+            # # image_mask = torch.zeros(*image_shape_hw, dtype=torch.float32)
+            # # image_mask[y0:y1, x0:x1] = segm_aligned
+            # # # segmentation for BitMask: np.array [H, W] of np.bool
+            # # pdb.set_trace()
+            # # obj["body_semantics"] = image_mask >= 0.5
+
+
+            # obj["body_semantics"] = obj["densepose"].segm
+        return body_semantics.squeeze()

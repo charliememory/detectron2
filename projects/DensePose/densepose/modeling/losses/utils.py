@@ -14,6 +14,34 @@ from densepose import DensePoseDataRelative
 
 LossDict = Dict[str, torch.Tensor]
 
+
+def tv_loss(image):
+    # shift one pixel and get difference (for both x and y direction)
+    loss = torch.mean(torch.abs(image[:, :, :, :-1] - image[:, :, :, 1:])) + \
+        torch.mean(torch.abs(image[:, :, :-1, :] - image[:, :, 1:, :]))
+    return loss
+    
+## Ref: https://github.com/nianticlabs/monodepth2/blob/ab2a1bf7d45ae53b1ae5a858f4451199f9c213b3/layers.py#L202
+"edge-aware smoothness"
+def smooth_loss(disp, img, reduction="mean"):
+    """Computes the smoothness loss for a disparity image
+    The color image is used for edge-aware smoothness
+    """
+    grad_disp_x = torch.abs(disp[:, :, :, :-1] - disp[:, :, :, 1:])
+    grad_disp_y = torch.abs(disp[:, :, :-1, :] - disp[:, :, 1:, :])
+
+    grad_img_x = torch.mean(torch.abs(img[:, :, :, :-1] - img[:, :, :, 1:]), 1, keepdim=True)
+    grad_img_y = torch.mean(torch.abs(img[:, :, :-1, :] - img[:, :, 1:, :]), 1, keepdim=True)
+
+    grad_disp_x *= torch.exp(-grad_img_x)
+    grad_disp_y *= torch.exp(-grad_img_y)
+
+    if reduction=="mean":
+        return grad_disp_x.mean() + grad_disp_y.mean()
+    elif reduction=="none":
+        return grad_disp_x, grad_disp_y
+
+
 ## Ref: https://github.com/hellojialee/Improved-Body-Parts/blob/19011cfb1e53198c9a86cdbe45ec2453ce67223c/models/loss_model.py#L134
 # def focal_l2_loss(s, sxing, mask_miss, heat_start, bkg_start, gamma=1, multi_task_weight=0.1,
 #                   keypoint_task_weight=1, nstack_weight=[1, 1, 1, 1], alpha=0., beta=0.):

@@ -126,7 +126,10 @@ class DensePoseChartLoss:
         self.w_part       = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_WEIGHTS
         self.use_part_focal_loss = cfg.MODEL.ROI_DENSEPOSE_HEAD.PART_FOCAL_LOSS
         self.w_segm       = cfg.MODEL.ROI_DENSEPOSE_HEAD.INDEX_WEIGHTS
+        self.w_body       = cfg.MODEL.ROI_DENSEPOSE_HEAD.BODY_WEIGHTS
         self.n_segm_chan  = cfg.MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS
+        self.w_smooth       = cfg.MODEL.ROI_DENSEPOSE_HEAD.SMOOTH_WEIGHTS
+        self.w_tv      = cfg.MODEL.ROI_DENSEPOSE_HEAD.TV_WEIGHTS
         # fmt: on
         self.segm_trained_by_masks = cfg.MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS
 # <<<<<<< HEAD
@@ -156,9 +159,12 @@ class DensePoseChartLoss:
 
         self.use_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S
         self.use_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON
+        self.use_aux_body_semantics = cfg.MODEL.CONDINST.AUX_SUPERVISION_BODY_SEMANTICS
         self.w_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S_WEIGHTS
         self.w_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON_WEIGHTS
+        self.w_aux_body_semantics = cfg.MODEL.CONDINST.AUX_SUPERVISION_BODY_SEMANTICS
         
+        self.pred_ins_body = cfg.MODEL.CONDINST.PREDICT_INSTANCE_BODY
 
 #     def __call__(
 #         self, proposals_with_gt: List[Instances], densepose_predictor_outputs: Any, images=None

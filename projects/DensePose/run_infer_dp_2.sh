@@ -1,6 +1,6 @@
 
 source /HPS/HumanBodyRetargeting7/work/For_Liqian/.bashrc_liqianma
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 # img_path=/esat/dragon/liqianma/datasets/Pose/KUL/liqian_outdoor_horizontal_01/images/frame_000001.jpg
 
 # data_root=/esat/dragon/liqianma/datasets/Pose/KUL/youtube_multi
@@ -45,8 +45,14 @@ export CUDA_VISIBLE_DEVICES=2
 data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/COCO2014/
 img_dir=$data_root/val2014_dp
 
+# data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/kid_dance
+# # data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/women_dance
+# img_dir=$data_root/images
+
+
 # ## Show mode
-# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_InsSeg_BS2x8'
+# # cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_InsSeg_BS2x8'
+# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_BS2x8'
 # model_name=${cfg_name}
 # vis_dir=$data_root/${model_name}
 # mkdir $vis_dir
@@ -56,9 +62,15 @@ img_dir=$data_root/val2014_dp
 # 						--output $vis_dir   --vis_rgb_img \
 
 ## Show mode
-cfg_name='densepose_CondInst_R_50_s1x'
-model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS8_s1x_pretrainCOCOkeypoints
-vis_dir=$data_root/${model_name}_flowTTA
+cfg_name='densepose_CondInst_R_50_s3x'
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1tv
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_BS2_s3x_pretrainCOCOkeypoints_sumLoss
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_0.1tv
+model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
+cfg_name='densepose_CondInst_R_50_s3x'
+model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
+vis_dir=$data_root/${model_name}_th0.1 #_flowTTA_th0.2
 mkdir $vis_dir
 python apply_net.py show configs/${cfg_name}.yaml \
 						output/${model_name}/model_final.pth \
@@ -81,9 +93,13 @@ python apply_net.py show configs/${cfg_name}.yaml \
 					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
 					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
 					    MODEL.CONDINST.v2 True \
-					    MODEL.FCOS.INFERENCE_TH_TEST 0.3 \
+					    MODEL.FCOS.INFERENCE_TH_TEST 0.1 \
     					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
 					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-    					MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+					    MODEL.CONDINST.INFER_INSTANCE_BODY True \
 					    # MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+    					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
 					    # SOLVER.AMP.ENABLED True \
+
+

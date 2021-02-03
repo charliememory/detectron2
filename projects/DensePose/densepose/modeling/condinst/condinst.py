@@ -201,6 +201,7 @@ class CondInst(nn.Module):
         self.rand_scale = cfg.MODEL.CONDINST.RAND_SCALE
         self.rand_scale_gap = cfg.MODEL.CONDINST.RAND_SCALE_GAP
         self.infer_TTA_with_rand_flow = cfg.MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW
+        self.infer_TTA_instance_mask = cfg.MODEL.CONDINST.INFER_TTA_INSTANCE_MASK
 
         # build top module
         in_channels = self.proposal_generator.in_channels_to_top_module
@@ -269,6 +270,10 @@ class CondInst(nn.Module):
 
         self.use_aux_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON
         self.segm_trained_by_masks = cfg.MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS
+
+        self.use_aux_body_semantics = cfg.MODEL.CONDINST.AUX_SUPERVISION_BODY_SEMANTICS
+
+        self.pred_ins_body = cfg.MODEL.CONDINST.PREDICT_INSTANCE_BODY
 
         # ## original ROI based densepose head
         # from detectron2.modeling.poolers import ROIPooler
@@ -450,6 +455,13 @@ class CondInst(nn.Module):
         # skeleton_feats = ImageList.from_tensors(skeleton_feats, self.backbone.size_divisibility)
         # pdb.set_trace()
         skeleton_feats = None
+
+        body_semantics_gt = None
+        if self.use_aux_body_semantics and self.training:
+            body_semantics_gt = [x["body_semantics"].to(self.device) for x in batched_inputs]
+            body_semantics_gt = ImageList.from_tensors(body_semantics_gt, self.backbone.size_divisibility).tensor
+            start = int(self.mask_out_stride // 2)
+            body_semantics_gt = body_semantics_gt[:, start::self.mask_out_stride, start::self.mask_out_stride]
         # if self.add_skeleton_feat:
         #     if self.use_gt_skeleton:
         #         skeleton_feats = self.process_skeleton_feats(batched_inputs, images.tensor.size(-2), images.tensor.size(-1))
@@ -526,7 +538,9 @@ class CondInst(nn.Module):
                 )
 
                 densepose_loss_dict = self._forward_mask_heads_train(proposals, features, s_ins_feats, iuv_feats, 
-                                        gt_instances=gt_instances, images=images, skeleton_feats_gt=skeleton_feats_gt)
+                                                gt_instances=gt_instances, images=images, 
+                                                skeleton_feats_gt=skeleton_feats_gt, 
+                                                body_semantics_gt=body_semantics_gt,)
 
                 # # instances = 
                 # loss_densepose = self._forward_densepose_train(mask_feats, gt_instances)
@@ -548,8 +562,9 @@ class CondInst(nn.Module):
                         gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
                         self.add_bitmasks(gt_instances, images.tensor.size(-2), images.tensor.size(-1))
                         ## Print sparsity
-                        # h, w = gt_instances[0].gt_bitmasks_full.shape[-2:]
-                        # sparsity = torch.clamp(gt_instances[0].gt_bitmasks_full.float().sum(0),0,1).sum()/h/w
+                        h, w = gt_instances[0].gt_bitmasks_full.shape[-2:]
+                        sparsity = torch.clamp(gt_instances[0].gt_bitmasks_full.float().sum(0),0,1).sum()/h/w
+                        print(batched_inputs[0]["file_name"], sparsity)
                         # self.sparsity_list.append(sparsity)
                         # ss = torch.tensor(self.sparsity_list)
                         # print("sparsity mean {}, min {}, max {}".format(ss.mean(), ss.min(), ss.max()))
@@ -627,7 +642,11 @@ class CondInst(nn.Module):
                             densepose_instances = run_single_img(ImageList.from_tensors([self.normalizer(img_warp)], self.backbone.size_divisibility), 
                                                             batched_inputs, skeleton_feats)
                             self.dp_output_queue.append(densepose_instances)
-                        self.img_queue = [F.interpolate(im[None,...], densepose_instances[0].pred_densepose.u.shape[-2:]) for im in self.img_queue]
+
+                        if not hasattr(densepose_instances[0], "pred_densepose"):
+                            self.img_queue = []
+                        else:
+                            self.img_queue = [F.interpolate(im[None,...], densepose_instances[0].pred_densepose.u.shape[-2:]) for im in self.img_queue]
 
 
                         # densepose_instances = _run_single_img(images, batched_inputs, skeleton_feats)
@@ -669,72 +688,78 @@ class CondInst(nn.Module):
 
 
                     dp_output_warp = copy.deepcopy(self.dp_output_queue[center_idx])
-                    coarse_segm = dp_output_warp[0].pred_densepose.coarse_segm
-                    coarse_segm_list = torch.chunk(coarse_segm, coarse_segm.shape[0])
-                    coarse_segm_list_list = [[a] for a in coarse_segm_list]
-                    # coarse_segm_cnt_list = [1] * len(coarse_segm_list)
-
-                    # weight_list = [0.2,0.2,0.2,0.2,0.2]
-                    if self.infer_TTA_with_rand_flow:
-                        weight_list = [0.2,0.2,0.4,0.2,0.2]
+                    if not hasattr(dp_output_warp[0], "pred_densepose"):
+                        densepose_instances = dp_output_warp
                     else:
-                        weight_list = [0.1,0.2,0.4,0.2,0.1]
-                    weight_list = [w/sum(weight_list) for w in weight_list]
-                    dp_output_warp[0].pred_densepose.fine_segm *= weight_list[center_idx]
-                    dp_output_warp[0].pred_densepose.u *= weight_list[center_idx]
-                    dp_output_warp[0].pred_densepose.v *= weight_list[center_idx]
-                    dp_output_warp[0].pred_densepose.coarse_segm *= weight_list[center_idx]
-                    for i in range(len(self.img_queue)):
-                        if i == center_idx:
-                            continue
+                        coarse_segm = dp_output_warp[0].pred_densepose.coarse_segm
+                        coarse_segm_list = torch.chunk(coarse_segm, coarse_segm.shape[0])
+                        coarse_segm_list_list = [[a] for a in coarse_segm_list]
+                        # coarse_segm_cnt_list = [1] * len(coarse_segm_list)
+
+                        # weight_list = [0.2,0.2,0.2,0.2,0.2]
+                        if self.infer_TTA_with_rand_flow:
+                            weight_list = [0.1,0.1,0.4,0.1,0.1]
                         else:
-                            # pdb.set_trace()
-                            # img_tgt = torch.tensor(img_queue[center_idx]).permute([2,0,1])[None,...].float()
-                            # img_ref = torch.tensor(img_queue[i]).permute([2,0,1])[None,...].float()
-                            img_tgt = self.img_queue[center_idx]
-                            img_ref = self.img_queue[i]
-                            if self.infer_TTA_with_rand_flow:
-                                img = self.img_queue[i]
-                                offset_x, offset_y = offset_list[i]
-                                flow_fw = torch.zeros_like(img)[:,:2]
-                                # pdb.set_trace()
-                                flow_fw[:,0:1] -= offset_x
-                                flow_fw[:,1:2] -= offset_y
-                            else:
-                                flow_fw = self.flow_model.pred_flow(img_tgt, img_ref)
-                            dp = copy.deepcopy(self.dp_output_queue[i])
-                            if not hasattr(dp[0], "pred_densepose"):
+                            weight_list = [0.1,0.2,0.4,0.2,0.1]
+                        weight_list = [w/sum(weight_list) for w in weight_list]
+                        dp_output_warp[0].pred_densepose.fine_segm *= weight_list[center_idx]
+                        dp_output_warp[0].pred_densepose.u *= weight_list[center_idx]
+                        dp_output_warp[0].pred_densepose.v *= weight_list[center_idx]
+                        dp_output_warp[0].pred_densepose.coarse_segm *= weight_list[center_idx]
+                        for i in range(len(self.img_queue)):
+                            if i == center_idx:
                                 continue
-                            ## Warp IUV
-                            dp_output_warp[0].pred_densepose.fine_segm += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.fine_segm, flow_fw)
-                            dp_output_warp[0].pred_densepose.u += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.u, flow_fw)
-                            dp_output_warp[0].pred_densepose.v += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.v, flow_fw)
-                            s_tmp = weight_list[i] * dp_output_warp[0].pred_densepose.coarse_segm
-                            s_list_tmp = torch.chunk(s_tmp, s_tmp.shape[0])
-                            binary_th = 0.1
-                            iou_th = 0.7
-                            for s_t in s_list_tmp:
-                                s_t_b = s_t[0,1]>binary_th
-                                for idx in range(len(coarse_segm_list_list)):
-                                    s = coarse_segm_list_list[idx][0]
-                                    s_b = s[0,1]>binary_th
-                                    iou = (s_t_b*s_b).float().sum() / ((s_t_b+s_b).float().sum() + 1e-7)
-                                    # print(iou)
-                                    # import imageio
+                            else:
+                                # pdb.set_trace()
+                                # img_tgt = torch.tensor(img_queue[center_idx]).permute([2,0,1])[None,...].float()
+                                # img_ref = torch.tensor(img_queue[i]).permute([2,0,1])[None,...].float()
+                                img_tgt = self.img_queue[center_idx]
+                                img_ref = self.img_queue[i]
+                                if self.infer_TTA_with_rand_flow:
+                                    img = self.img_queue[i]
+                                    offset_x, offset_y = offset_list[i]
+                                    flow_fw = torch.zeros_like(img)[:,:2]
                                     # pdb.set_trace()
-                                    # imageio.imwrite('tmp/s_{}.png'.format(iou), torch.cat([s_t,s], dim=-1)[0].permute(1,2,0).cuda().numpy())
-                                    if iou>iou_th:
-                                        coarse_segm_list_list[idx].append(s_t)
-                                        # break
+                                    flow_fw[:,0:1] -= offset_x
+                                    flow_fw[:,1:2] -= offset_y
+                                else:
+                                    flow_fw = self.flow_model.pred_flow(img_tgt, img_ref)
+                                dp = copy.deepcopy(self.dp_output_queue[i])
+                                if not hasattr(dp[0], "pred_densepose"):
+                                    continue
+                                ## Warp IUV
+                                dp_output_warp[0].pred_densepose.fine_segm += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.fine_segm, flow_fw)
+                                dp_output_warp[0].pred_densepose.u += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.u, flow_fw)
+                                dp_output_warp[0].pred_densepose.v += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.v, flow_fw)
+                                
+                                if self.infer_TTA_instance_mask:
+                                    s_tmp = weight_list[i] * dp_output_warp[0].pred_densepose.coarse_segm
+                                    s_list_tmp = torch.chunk(s_tmp, s_tmp.shape[0])
+                                    binary_th = 0.1
+                                    iou_th = 0.7
+                                    for s_t in s_list_tmp:
+                                        s_t_b = s_t[0,1]>binary_th
+                                        for idx in range(len(coarse_segm_list_list)):
+                                            s = coarse_segm_list_list[idx][0]
+                                            s_b = s[0,1]>binary_th
+                                            iou = (s_t_b*s_b).float().sum() / ((s_t_b+s_b).float().sum() + 1e-7)
+                                            # print(iou)
+                                            # import imageio
+                                            # pdb.set_trace()
+                                            # imageio.imwrite('tmp/s_{}.png'.format(iou), torch.cat([s_t,s], dim=-1)[0].permute(1,2,0).cuda().numpy())
+                                            if iou>iou_th:
+                                                coarse_segm_list_list[idx].append(s_t)
+                                                # break
 
-                    # dp_output_warp[0].pred_densepose.fine_segm /= len(self.img_queue)
-                    # dp_output_warp[0].pred_densepose.u /= len(self.img_queue)
-                    # dp_output_warp[0].pred_densepose.v /= len(self.img_queue)
-                    # coarse_segm = [torch.stack(s_list,0).mean(0) for s_list in coarse_segm_list_list]
-                    coarse_segm = [torch.stack(s_list,0).sum(0) for s_list in coarse_segm_list_list]
+                        # dp_output_warp[0].pred_densepose.fine_segm /= len(self.img_queue)
+                        # dp_output_warp[0].pred_densepose.u /= len(self.img_queue)
+                        # dp_output_warp[0].pred_densepose.v /= len(self.img_queue)
+                        # coarse_segm = [torch.stack(s_list,0).mean(0) for s_list in coarse_segm_list_list]
 
-                    dp_output_warp[0].pred_densepose.coarse_segm = torch.cat(coarse_segm, dim=0)
-                    densepose_instances = dp_output_warp
+                        if self.infer_TTA_instance_mask:
+                            coarse_segm = [torch.stack(s_list,0).sum(0) for s_list in coarse_segm_list_list]
+                            dp_output_warp[0].pred_densepose.coarse_segm = torch.cat(coarse_segm, dim=0)
+                        densepose_instances = dp_output_warp
 
 
                 else:
@@ -853,7 +878,8 @@ class CondInst(nn.Module):
 
 
 
-    def _forward_mask_heads_train(self, proposals, fpn_features, mask_feats, iuv_feats, gt_instances: List[Instances], images=None, skeleton_feats_gt=None):
+    def _forward_mask_heads_train(self, proposals, fpn_features, mask_feats, iuv_feats, 
+        gt_instances: List[Instances], images=None, skeleton_feats_gt=None, body_semantics_gt=None):
         # prepare the inputs for mask heads
         pred_instances = proposals["instances"]
         # iuv_logits = self.iuv_head(iuv_feats, self.mask_branch.out_stride, pred_instances)
@@ -889,7 +915,8 @@ class CondInst(nn.Module):
         loss_mask = self.mask_head(self.iuv_head, 
             fpn_features, mask_feats, iuv_feats, 
             self.mask_branch.out_stride, pred_instances, gt_instances=gt_instances, 
-            mask_out_bg_feats=self.mask_out_bg_feats, pred_instances_nms=pred_instances_nms, images=images, skeleton_feats_gt=skeleton_feats_gt
+            mask_out_bg_feats=self.mask_out_bg_feats, pred_instances_nms=pred_instances_nms, 
+            images=images, skeleton_feats_gt=skeleton_feats_gt, body_semantics_gt=body_semantics_gt
         )
 
         return loss_mask
@@ -996,15 +1023,16 @@ class CondInst(nn.Module):
                     if per_im_gt_inst.gt_densepose[j] is not None:
                         x1,y1,x2,y2 = boxes_xyxy[j].int()
                         fg_mask = (per_im_gt_inst.gt_densepose[j].segm[None,None,...]>0).float()
-                        fg_mask = self._aug_bitmasks(fg_mask, self.is_flipped, is_scaled=False)
+                        # fg_mask = self._aug_bitmasks(fg_mask, self.is_flipped, is_scaled=False)
                         bitmasks_full[j,y1:y2,x1:x2] = F.interpolate(fg_mask, (y2-y1,x2-x1), mode="nearest")[0,0]
                     # else:
                     #     print(j)
                     #     pdb.set_trace()
                 bitmasks = bitmasks_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
-                # pdb.set_trace()
                 # import imageio
                 # imageio.imwrite("output/tmp/bitmasks_0.png",bitmasks[0].cpu().numpy())
+                print(bitmasks.abs().mean([1,2]))
+                pdb.set_trace()
 
                 per_im_gt_inst.set('gt_bitmasks', bitmasks)
                 per_im_gt_inst.set('gt_bitmasks_full', bitmasks_full)
@@ -1022,7 +1050,7 @@ class CondInst(nn.Module):
                         h, w = img_ori_size
                         bitmask = polygons_to_bitmask(per_polygons, h, w)
                         bitmask = torch.from_numpy(bitmask).to(self.device).float()
-                        bitmask = self._aug_bitmasks(bitmask)
+                        # bitmask = self._aug_bitmasks(bitmask)
                         bitmask = F.pad(bitmask, (0, im_w - w, 0, im_h - h), "constant", 0)
 
                         bitmask_full = bitmask.clone()
@@ -1039,7 +1067,7 @@ class CondInst(nn.Module):
                     per_im_gt_inst.gt_bitmasks_full = torch.stack(per_im_bitmasks_full, dim=0)
                 else: # RLE format bitmask
                     bitmasks = per_im_gt_inst.get("gt_masks").tensor
-                    bitmasks = self._aug_bitmasks(bitmasks, self.is_flipped, self.is_scaled, self.scale_factor)
+                    # bitmasks = self._aug_bitmasks(bitmasks, self.is_flipped, self.is_scaled, self.scale_factor)
                     h, w = bitmasks.size()[1:]
                     # pad to new size
                     bitmasks_full = F.pad(bitmasks, (0, im_w - w, 0, im_h - h), "constant", 0)
@@ -1049,6 +1077,29 @@ class CondInst(nn.Module):
                     per_im_gt_inst.gt_bitmasks = bitmasks
                     per_im_gt_inst.gt_bitmasks_full = bitmasks_full
 
+            if self.pred_ins_body:
+                N_ins = len(per_im_gt_inst)
+                boxes_xyxy = per_im_gt_inst.gt_boxes.tensor
+                bitmasks_body_full = torch.zeros([N_ins,im_h,im_w], dtype=torch.float32, device=self.device)
+                for j in range(len(per_im_gt_inst.gt_densepose)):
+                    if per_im_gt_inst.gt_densepose[j] is not None:
+                        x1,y1,x2,y2 = boxes_xyxy[j].int()
+                        fg_mask = (per_im_gt_inst.gt_densepose[j].segm[None,None,...]>0).float()
+                        bitmasks_body_full[j,y1:y2,x1:x2] = F.interpolate(fg_mask, (y2-y1,x2-x1), mode="nearest")[0,0]
+                    # else:
+                    #     print(j)
+                    #     pdb.set_trace()
+                bitmasks_body_full = bitmasks_body_full.bool()
+                bitmasks_body = bitmasks_body_full[:, start::self.mask_out_stride, start::self.mask_out_stride]
+                # import imageio
+                # imageio.imwrite("output/tmp/bitmasks_0.png",bitmasks[0].cpu().numpy())
+                # pdb.set_trace()
+                # print(bitmasks_body.abs().mean([1,2]))
+
+                # per_im_gt_inst.gt_bitmasks = torch.cat([per_im_gt_inst.gt_bitmasks[:,None,:,:], bitmasks_body[:,None,:,:]], dim=1)
+                # per_im_gt_inst.gt_bitmasks_full = torch.cat([per_im_gt_inst.gt_bitmasks_full[:,None,:,:], bitmasks_body_full[:,None,:,:]], dim=1)
+                per_im_gt_inst.set('gt_bitmasks_body', bitmasks_body)
+                per_im_gt_inst.set('gt_bitmasks_body_full', bitmasks_body_full)
 
     def process_skeleton_feats(self, batched_inputs, im_h, im_w):
         skeleton_feats = [x["skeleton_feat"] for x in batched_inputs]

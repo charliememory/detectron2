@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-import torch
+import torch, pdb
 from torch import nn
 from torch.nn import functional as F
 import fvcore.nn.weight_init as weight_init
@@ -54,7 +54,7 @@ class DensePoseV1ConvXGNHead(nn.Module):
         self.n_out_channels = n_channels
         # initialize_module_params(self)
 
-    def forward(self, features: torch.Tensor):
+    def forward(self, features: torch.Tensor, ins_indices_batch=None, ins_indices_len=None):
         """
         Apply DensePose fully convolutional head to the input features
 
@@ -68,8 +68,10 @@ class DensePoseV1ConvXGNHead(nn.Module):
         for i in range(self.n_stacked_convs):
             layer_name = self._get_layer_name(i)
             x = getattr(self, layer_name)(x)
-            x = F.relu(x)
-            output = x
+            if i < self.n_stacked_convs-1:
+                x = F.relu(x)
+        # pdb.set_trace()
+        output = x
         return output
 
     def _get_layer_name(self, i: int):

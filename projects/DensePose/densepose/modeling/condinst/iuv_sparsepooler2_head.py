@@ -68,11 +68,15 @@ class DecoderSparse(nn.Module):
         agg_channels = cfg.MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS
         self.use_aux_global_s = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_S
         self.use_aux_global_skeleton = cfg.MODEL.CONDINST.AUX_SUPERVISION_GLOBAL_SKELETON
+        self.use_aux_body_semantics = cfg.MODEL.CONDINST.AUX_SUPERVISION_BODY_SEMANTICS
+
         if self.use_aux_global_s:
             num_classes += 1
         if self.use_aux_global_skeleton:
             "to check"
             num_classes += 55
+        if self.use_aux_body_semantics:
+            num_classes += 15
         self.predictor_conv_type = cfg.MODEL.CONDINST.IUVHead.PREDICTOR_TYPE
         self.use_dropout = cfg.MODEL.CONDINST.IUVHead.DROPOUT
         self.use_san = cfg.MODEL.CONDINST.IUVHead.USE_SAN

@@ -89,9 +89,7 @@ class DensePoseCOCOEvaluator(DatasetEvaluator):
                 self._predictions.extend(prediction_to_dict_global_siuv(instances, input["image_id"]))
             else:
                 self._predictions.extend(
-                    prediction_to_dict(
-                        instances, input["image_id"], self._embedder, self._metadata.class_to_mesh_name
-                    )
+                    prediction_to_dict(instances, input["image_id"], self._embedder, self._metadata.class_to_mesh_name)
                 )
 # >>>>>>> upstream/master
 

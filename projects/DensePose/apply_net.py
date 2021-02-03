@@ -513,6 +513,11 @@ class ShowAction(InferenceAction):
             action='store_true',
             help="Wheather visualize rgb image instead of gray (default)",
         )
+        parser.add_argument(
+            "--vis_black_img",
+            action='store_true',
+            help="Wheather visualize a black image instead of input image",
+        )
 
     @classmethod
     def setup_config(
@@ -538,11 +543,13 @@ class ShowAction(InferenceAction):
         image_fpath = entry["file_name"]
         logger.info(f"Processing {image_fpath}")
         if context["vis_rgb_img"]:
-            image = entry["image"]
+            image = entry["image"][:]
             # pdb.set_trace()
         else:
             image = cv2.cvtColor(entry["image"], cv2.COLOR_BGR2GRAY)
             image = np.tile(image[:, :, np.newaxis], [1, 1, 3])
+        if context["vis_black_img"]:
+            image = np.zeros_like(image) 
         # pdb.set_trace()
         data = extractor(outputs)
         # pdb.set_trace()
@@ -590,6 +597,7 @@ class ShowAction(InferenceAction):
             "visualizer": visualizer,
             "out_fname": args.output,
             "vis_rgb_img": args.vis_rgb_img,
+            "vis_black_img": args.vis_black_img,
             "entry_idx": 0,
         }
         return context
