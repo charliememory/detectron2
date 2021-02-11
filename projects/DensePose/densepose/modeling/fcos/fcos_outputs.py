@@ -54,6 +54,7 @@ def compute_ctrness_targets(reg_targets):
 class FCOSOutputs(nn.Module):
     def __init__(self, cfg):
         super(FCOSOutputs, self).__init__()
+        self.disable_class_loss = cfg.MODEL.FCOS.DISABLE_CLASS_LOSS
 
         self.focal_loss_alpha = cfg.MODEL.FCOS.LOSS_ALPHA
         self.focal_loss_gamma = cfg.MODEL.FCOS.LOSS_GAMMA
@@ -336,6 +337,9 @@ class FCOSOutputs(nn.Module):
             gamma=self.focal_loss_gamma,
             reduction="sum",
         ) / num_pos_avg
+
+        # if self.disable_class_loss:
+        #     class_loss = class_loss * 0
 
         instances = instances[pos_inds]
         instances.pos_inds = pos_inds

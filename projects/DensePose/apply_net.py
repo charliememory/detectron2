@@ -34,6 +34,7 @@ from densepose.vis.densepose_results import (
     DensePoseResultsFineSegmentationVisualizer,
     DensePoseResultsUVisualizer,
     DensePoseResultsVVisualizer,
+    DensePoseResultsIUVVisualizer,
 )
 from densepose.vis.densepose_results_textures import (
     DensePoseResultsVisualizerWithTexture,
@@ -463,6 +464,7 @@ class ShowAction(InferenceAction):
         "dp_cse_texture": DensePoseOutputsTextureVisualizer,
         "dp_vertex": DensePoseOutputsVertexVisualizer,
         "bbox": ScoredBoundingBoxVisualizer,
+        "dp_iuv": DensePoseResultsIUVVisualizer,
     }
 
     @classmethod
@@ -552,11 +554,16 @@ class ShowAction(InferenceAction):
             image = np.zeros_like(image) 
         # pdb.set_trace()
         data = extractor(outputs)
-        # pdb.set_trace()
         image_vis = visualizer.visualize(image, data)
         entry_idx = context["entry_idx"] + 1
+        # pdb.set_trace()
+        if len(visualizer.visualizers)==1 and type(visualizer.visualizers[0])==DensePoseResultsIUVVisualizer:
+            ## Save IUV as png format
+            out_fname = os.path.join(context["out_fname"], image_fpath.split('/')[-1].split('.')[0]+".png")
+        else:
+            ## Save vis with original format
+            out_fname = os.path.join(context["out_fname"], image_fpath.split('/')[-1])
         # out_fname = cls._get_out_fname(entry_idx, context["out_fname"])
-        out_fname = os.path.join(context["out_fname"], image_fpath.split('/')[-1])
         out_dir = os.path.dirname(out_fname)
         if len(out_dir) > 0 and not os.path.exists(out_dir):
             os.makedirs(out_dir)

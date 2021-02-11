@@ -26,6 +26,57 @@ class DensePoseResultsVisualizer(object):
         image_bgr = self.context_to_image_bgr(context)
         return image_bgr
 
+
+class DensePoseResultsIUVVisualizer(DensePoseResultsVisualizer):
+    def __init__(
+        self,
+        inplace=True,
+        cmap=None,
+        alpha=1.,
+        val_scale=1.0,
+        **kwargs,
+    ):
+        # self.mask_visualizer = MatrixVisualizer(
+        #     inplace=inplace, cmap=cmap, val_scale=val_scale, alpha=alpha
+        # )
+        self.inplace = inplace
+        self.alpha = alpha
+        # self.data_extractor = data_extractor
+        self.u_extractor = _extract_u_from_iuvarr
+        self.v_extractor = _extract_v_from_iuvarr
+        self.i_extractor = _extract_i_from_iuvarr
+
+    def create_visualization_context(self, image_bgr: Image):
+        return image_bgr
+
+    def context_to_image_bgr(self, context):
+        return context
+
+    def get_image_bgr_from_context(self, context):
+        return context
+
+    def visualize_iuv_arr(self, context, iuv_arr: np.array, bbox_xywh):
+        image_bgr = self.get_image_bgr_from_context(context)
+
+        x, y, w, h = [int(v) for v in bbox_xywh]
+        if w <= 0 or h <= 0:
+            return image_bgr
+        iuv_arr = iuv_arr.transpose([1,2,0])
+        iuv_arr = iuv_arr * (iuv_arr[:,:,0:1]>0)
+        if self.inplace:
+            image_target_bgr = image_bgr
+        else:
+            image_target_bgr = image_bgr * 0
+        iuv_arr_uncrop = np.zeros_like(image_target_bgr)
+        iuv_arr_uncrop[y : y + h, x : x + w, :] = iuv_arr
+        inds = np.stack([iuv_arr_uncrop[...,0]]*3, axis=-1)>0
+        # import pdb; pdb.set_trace()
+        image_target_bgr[inds] = (
+            image_target_bgr[inds] * (1.0 - self.alpha) + iuv_arr_uncrop[inds] * self.alpha
+        )
+        return image_target_bgr
+
+
 class DensePoseMaskedColormapResultsVisualizer(DensePoseResultsVisualizer):
     def __init__(
         self,

@@ -13,12 +13,12 @@ img_dir=$data_root/images
 # img_dir=$data_root/images/bonn_5sec/000044_mpii
 
 # ## Visualization mode
-# vis_dir=$data_root/densepose_rcnn_R_101_FPN_DL_s1x_1GPU
-# mkdir $vis_dir
-# python apply_net.py show configs/densepose_rcnn_R_101_FPN_DL_s1x.yaml \
-# 						output/densepose_rcnn_R_101_FPN_DL_s1x_1GPU/model_final.pth \
-# 						$img_dir dp_contour,bbox \
-# 						--output $vis_dir/frame_.jpg  --smooth_k 0
+vis_dir=$data_root/densepose_rcnn_R_50_FPN_DL_s1x_BS2x8
+mkdir $vis_dir
+python apply_net.py show configs/densepose_rcnn_R_50_FPN_DL_s1x.yaml \
+						output/densepose_rcnn_R_50_FPN_DL_s1x_BS2x8/model_final.pth \
+						$img_dir dp_iuv \
+						--output $vis_dir/frame_.jpg  --vis_black_img # --smooth_k 0
 
 # vis_dir=$data_root/densepose_rcnn_R_101_FPN_DL_s1x_InsSeg_1GPU
 # mkdir $vis_dir
@@ -150,40 +150,40 @@ data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/COCO2014/
 img_dir=$data_root/val2014_dp
 
 
-## Show mode
-cfg_name='densepose_CondInst_R_50_s3x'
-model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smoothTrue_dpMaskInstance
-vis_dir=$data_root/${model_name} #_flowTTA_th0.2
-mkdir $vis_dir
-python apply_net.py show configs/${cfg_name}.yaml \
-						output/${model_name}/model_0099999.pth \
-						$img_dir dp_contour \
-						--output $vis_dir   --vis_rgb_img  \
-						--opts \
-					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
-					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-					    SOLVER.CHECKPOINT_PERIOD 5000 \
-					    DATALOADER.NUM_WORKERS 0 \
-					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
-					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
-					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-					    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
-					    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
-					    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
-					    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
-					    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
-					    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
-					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
-					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-					    MODEL.CONDINST.v2 True \
-					    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
-    					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
-					    # MODEL.CONDINST.INFER_INSTANCE_BODY True \
-    					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
-					    # MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
-					    # SOLVER.AMP.ENABLED True \
+# ## Show mode
+# cfg_name='densepose_CondInst_R_50_s3x'
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smoothTrue_dpMaskInstance
+# vis_dir=$data_root/${model_name} #_flowTTA_th0.2
+# mkdir $vis_dir
+# python apply_net.py show configs/${cfg_name}.yaml \
+# 						output/${model_name}/model_0099999.pth \
+# 						$img_dir dp_contour \
+# 						--output $vis_dir   --vis_rgb_img  \
+# 						--opts \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+# 					    SOLVER.CHECKPOINT_PERIOD 5000 \
+# 					    DATALOADER.NUM_WORKERS 0 \
+# 					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+# 					    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+# 					    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+# 					    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+# 					    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+# 					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+# 					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+# 					    MODEL.CONDINST.v2 True \
+# 					    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+#     					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+# 					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+# 					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+# 					    # MODEL.CONDINST.INFER_INSTANCE_BODY True \
+#     					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+# 					    # MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+# 					    # SOLVER.AMP.ENABLED True \
 
 
 
