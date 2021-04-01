@@ -696,11 +696,11 @@ class CondInst(nn.Module):
                         coarse_segm_list_list = [[a] for a in coarse_segm_list]
                         # coarse_segm_cnt_list = [1] * len(coarse_segm_list)
 
-                        # weight_list = [0.2,0.2,0.2,0.2,0.2]
                         if self.infer_TTA_with_rand_flow:
                             weight_list = [0.1,0.1,0.4,0.1,0.1]
                         else:
-                            weight_list = [0.1,0.2,0.4,0.2,0.1]
+                            # weight_list = [0.1,0.2,0.4,0.2,0.1]
+                            weight_list = [0.2,0.2,0.2,0.2,0.2]
                         weight_list = [w/sum(weight_list) for w in weight_list]
                         dp_output_warp[0].pred_densepose.fine_segm *= weight_list[center_idx]
                         dp_output_warp[0].pred_densepose.u *= weight_list[center_idx]
@@ -733,7 +733,9 @@ class CondInst(nn.Module):
                                 dp_output_warp[0].pred_densepose.v += weight_list[i] * self.flow_model.tensor_warp_via_flow(dp[0].pred_densepose.v, flow_fw)
                                 
                                 if self.infer_TTA_instance_mask:
-                                    s_tmp = weight_list[i] * dp_output_warp[0].pred_densepose.coarse_segm
+                                    # s_tmp = weight_list[i] * dp_output_warp[0].pred_densepose.coarse_segm
+                                    num = dp_output_warp[0].pred_densepose.coarse_segm.shape[0]
+                                    s_tmp = weight_list[i] * self.flow_model.tensor_warp_via_flow(dp_output_warp[0].pred_densepose.coarse_segm, torch.cat([flow_fw]*num, dim=0))
                                     s_list_tmp = torch.chunk(s_tmp, s_tmp.shape[0])
                                     binary_th = 0.1
                                     iou_th = 0.7

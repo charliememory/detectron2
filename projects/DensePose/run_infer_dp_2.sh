@@ -1,6 +1,6 @@
 
 source /HPS/HumanBodyRetargeting7/work/For_Liqian/.bashrc_liqianma
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 # img_path=/esat/dragon/liqianma/datasets/Pose/KUL/liqian_outdoor_horizontal_01/images/frame_000001.jpg
 
 # data_root=/esat/dragon/liqianma/datasets/Pose/KUL/youtube_multi
@@ -42,16 +42,16 @@ export CUDA_VISIBLE_DEVICES=1
 # 						--output $vis_dir/frame_.jpg
 
 
-data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/COCO2014/
-img_dir=$data_root/val2014_dp
+# data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/COCO2014/
+# img_dir=$data_root/val2014_dp
 
-# data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/kid_dance
-# # data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/women_dance
-# img_dir=$data_root/images
+data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/kid_dance
+# data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube/women_dance
+img_dir=$data_root/images
 
 
-# ## Show mode
-# # cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_InsSeg_BS2x8'
+## Show mode
+# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_InsSeg_BS2x8'
 # cfg_name='densepose_rcnn_R_50_FPN_DL_s1x_BS2x8'
 # model_name=${cfg_name}
 # vis_dir=$data_root/${model_name}
@@ -62,44 +62,195 @@ img_dir=$data_root/val2014_dp
 # 						--output $vis_dir   --vis_rgb_img \
 
 ## Show mode
-cfg_name='densepose_CondInst_R_50_s3x'
-# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1tv
-# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth
-# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_BS2_s3x_pretrainCOCOkeypoints_sumLoss
-# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_0.1tv
-model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
-cfg_name='densepose_CondInst_R_50_s3x'
-model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
-vis_dir=$data_root/${model_name}_th0.1 #_flowTTA_th0.2
-mkdir $vis_dir
-python apply_net.py show configs/${cfg_name}.yaml \
-						output/${model_name}/model_final.pth \
-						$img_dir dp_contour \
-						--output $vis_dir   --vis_rgb_img  \
-						--opts \
-					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
-					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
-					    SOLVER.CHECKPOINT_PERIOD 5000 \
-					    DATALOADER.NUM_WORKERS 0 \
-					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
-					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
-					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
-					    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
-					    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
-					    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
-					    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
-					    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
-					    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
-					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
-					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
-					    MODEL.CONDINST.v2 True \
-					    MODEL.FCOS.INFERENCE_TH_TEST 0.1 \
-    					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
-					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
-					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
-					    MODEL.CONDINST.INFER_INSTANCE_BODY True \
-					    # MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
-    					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
-					    # SOLVER.AMP.ENABLED True \
+# cfg_name='densepose_CondInst_R_50_s3x'
+# # model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1tv
+# # model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth
+# # model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_BS2_s3x_pretrainCOCOkeypoints_sumLoss
+# # model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_0.1tv
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
+# cfg_name='densepose_CondInst_R_50_s3x'
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS2_s3x_pretrainCOCOkeypoints_1smooth_dpMaskInstance
+# vis_dir=$data_root/${model_name}_th0.1 #_flowTTA_th0.2
+# mkdir $vis_dir
+# python apply_net.py show configs/${cfg_name}.yaml \
+# 						output/${model_name}/model_final.pth \
+# 						$img_dir dp_contour \
+# 						--output $vis_dir   --vis_rgb_img  \
+# 						--opts \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+# 					    SOLVER.CHECKPOINT_PERIOD 5000 \
+# 					    DATALOADER.NUM_WORKERS 0 \
+# 					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+# 					    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+# 					    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+# 					    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 3 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+# 					    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+# 					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+# 					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+# 					    MODEL.CONDINST.v2 True \
+# 					    MODEL.FCOS.INFERENCE_TH_TEST 0.1 \
+#     					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+# 					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+# 					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+# 					    MODEL.CONDINST.INFER_INSTANCE_BODY True \
+# 					    # MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+#     					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+# 					    # SOLVER.AMP.ENABLED True \
 
+
+
+# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
+# model_name=${cfg_name}
+# vis_dir=$data_root/${model_name}
+# mkdir $vis_dir
+# python apply_net.py show configs/densepose_rcnn_R_50_FPN_DL_s1x.yaml \
+# 						output/${model_name}/model_final_0ed407.pkl \
+# 						$img_dir dp_contour,bbox \
+# 						--output $vis_dir   --vis_rgb_img \
+
+# cfg_name='densepose_CondInst_R_50_s1x'
+# model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS8_s1x_pretrainCOCOkeypoints_1smooth_dpMaskInstance_dilate0
+# vis_dir=$data_root/${model_name}_th0.2_smooth2 #_flowTTA_th0.2
+# mkdir $vis_dir
+# python apply_net.py show configs/${cfg_name}.yaml \
+# 						output/${model_name}/model_final.pth \
+# 						$img_dir dp_contour \
+# 						--output $vis_dir   --vis_rgb_img  \
+# 						--opts \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+# 					    SOLVER.CHECKPOINT_PERIOD 5000 \
+# 					    DATALOADER.NUM_WORKERS 0 \
+# 					    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+# 					    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+# 					    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+# 					    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 0 \
+# 					    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+# 					    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+# 					    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+# 					    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+# 					    MODEL.CONDINST.v2 True \
+# 					    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+#     					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+# 					    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+# 					    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+# 					    MODEL.CONDINST.INFER_INSTANCE_BODY True \
+# 					    MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+#     					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+# 					    # SOLVER.AMP.ENABLED True \
+
+
+# data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube
+# for vid_dir in $data_root/1*_clip01
+# do
+# 	img_dir=$vid_dir/images
+# 	cfg_name='densepose_CondInst_R_50_s1x'
+# 	model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS8_s1x_pretrainCOCOkeypoints_1smooth_dpMaskInstance_dilate0
+# 	vis_dir=$vid_dir/${model_name}_th0.2_smooth2 #_flowTTA_th0.2
+# 	mkdir $vis_dir
+# 	python apply_net.py show configs/${cfg_name}.yaml \
+# 							output/${model_name}/model_final.pth \
+# 							$img_dir dp_contour \
+# 							--output $vis_dir   --vis_rgb_img  \
+# 							--opts \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+# 						    SOLVER.CHECKPOINT_PERIOD 5000 \
+# 						    DATALOADER.NUM_WORKERS 0 \
+# 						    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+# 						    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+# 						    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+# 						    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 0 \
+# 						    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+# 						    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+# 						    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+# 						    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+# 						    MODEL.CONDINST.v2 True \
+# 						    MODEL.FCOS.INFERENCE_TH_TEST 0.2 \
+# 	    					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+# 						    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+# 						    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+# 						    MODEL.CONDINST.INFER_INSTANCE_BODY True \
+# 						    MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+# 	    					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+# 						    # SOLVER.AMP.ENABLED True \
+
+# 	cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
+# 	model_name=${cfg_name}
+# 	vis_dir=$vid_dir/${model_name}
+# 	mkdir $vis_dir
+# 	python apply_net.py show configs/densepose_rcnn_R_50_FPN_DL_s1x.yaml \
+# 							output/${model_name}/model_final_0ed407.pkl \
+# 							$img_dir dp_contour,bbox \
+# 							--output $vis_dir   --vis_rgb_img \
+
+# done
+
+data_root=/HPS/HumanBodyRetargeting7/work/For_Liqian/datasets/Pose/youtube2
+for vid_dir in $data_root/07_clip02
+do
+	img_dir=$vid_dir/images
+	
+	for vis_type in dp_iuv
+	do
+		cfg_name='densepose_CondInst_R_50_s1x'
+		model_name=${cfg_name}_SparseInsINNoOverlapResInput_resIUVOnly_GTinsDilated3_10meanUVLoss_5sLoss_BS8_s1x_pretrainCOCOkeypoints_1smooth_dpMaskInstance_dilate0
+		vis_dir=$vid_dir/${model_name}_th0.3_smooth2_smoothCoarseSegm_${vis_type} #_flowTTA_th0.2
+		mkdir $vis_dir
+		python apply_net.py show configs/${cfg_name}.yaml \
+								output/${model_name}/model_final.pth \
+								$img_dir ${vis_type} \
+								--output ${vis_dir}   --vis_black_img   \
+								--opts \
+							    MODEL.ROI_DENSEPOSE_HEAD.NUM_COARSE_SEGM_CHANNELS 1 \
+							    MODEL.ROI_DENSEPOSE_HEAD.COARSE_SEGM_TRAINED_BY_MASKS True \
+							    SOLVER.CHECKPOINT_PERIOD 5000 \
+							    DATALOADER.NUM_WORKERS 0 \
+							    MODEL.CONDINST.IUVHead.NAME "IUVSparsePooler2Head" \
+							    MODEL.ROI_DENSEPOSE_HEAD.LOSS_NAME "DensePoseChartGlobalIUVSeparatedSPoolerLoss" \
+							    MODEL.ROI_DENSEPOSE_HEAD.NAME "DensePoseV1ConvXGNSparseGNHead" \
+							    MODEL.ROI_DENSEPOSE_HEAD.CONV_HEAD_DIM 256 \
+							    MODEL.CONDINST.MASK_BRANCH.AGG_CHANNELS 256 \
+							    MODEL.CONDINST.IUVHead.MASK_OUT_BG_FEATURES "hard" \
+							    MODEL.CONDINST.IUVHead.DILATE_FGMASK_KENERAL_SIZE 0 \
+							    MODEL.ROI_DENSEPOSE_HEAD.DEEPLAB.NORM "InsIN" \
+							    MODEL.CONDINST.IUVHead.USE_AGG_FEATURES True \
+							    MODEL.CONDINST.IUVHead.INSTANCE_AWARE_GN True \
+							    MODEL.CONDINST.IUVHead.REMOVE_MASK_OVERLAP True \
+							    MODEL.CONDINST.v2 True \
+							    MODEL.FCOS.INFERENCE_TH_TEST 0.3 \
+		    					MODEL.CONDINST.IUVHead.RESIDUAL_INPUT True \
+							    MODEL.CONDINST.INFERENCE_GLOBAL_SIUV True \
+							    MODEL.CONDINST.PREDICT_INSTANCE_BODY True \
+							    MODEL.CONDINST.INFER_INSTANCE_BODY True \
+							    MODEL.INFERENCE_SMOOTH_FRAME_NUM 2\
+							    MODEL.CONDINST.INFER_TTA_INSTANCE_MASK True \
+		    					# MODEL.CONDINST.INFER_TTA_WITH_RAND_FLOW True
+							    # SOLVER.AMP.ENABLED True \
+	
+	done
+	# cfg_name='densepose_rcnn_R_50_FPN_DL_s1x'
+	# model_name=${cfg_name}
+	# vis_dir=$vid_dir/${model_name}
+	# mkdir $vis_dir
+	# python apply_net.py show configs/densepose_rcnn_R_50_FPN_DL_s1x.yaml \
+	# 						output/${model_name}/model_final_0ed407.pkl \
+	# 						$img_dir dp_contour \
+	# 						--output $vis_dir   --vis_rgb_img \
+
+done
+
+python run_temporalSmooth_flow_eval.py
+python run_temporalSmooth_flow_eval.py
 

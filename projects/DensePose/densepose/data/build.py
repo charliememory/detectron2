@@ -478,6 +478,16 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
 
     # import pdb
     # dataset_dicts = dataset_dicts[:100]
+    ins_name = cfg.MODEL.CONDINST.INFER_INSTANCE_NAME
+    if ins_name is not None:
+        dataset_dicts_new = []
+        for idx in range(len(dataset_dicts)):
+            if ins_name in dataset_dicts[idx]["file_name"]:
+            # if len(dataset_dicts[idx]["annotations"]) in [13,14]:
+                dataset_dicts_new.append(dataset_dicts[idx])
+        dataset_dicts = dataset_dicts_new
+
+
     ins_num = cfg.MODEL.CONDINST.INFER_INSTANCE_NUM # range in [1,14]
     if ins_num>0:
         dataset_dicts_new = []
